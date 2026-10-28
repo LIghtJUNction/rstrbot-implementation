@@ -14,7 +14,7 @@ npm test -- --binary ../../target/debug/rstrbot
 ```
 
 To use an already-installed Chromium executable, pass `--chromium /absolute/path`.
-Use `--evidence-dir /path/to/results` to select a separate receipt/log directory.
+Use `--web-dir /path/to/dist` for a separate web build, and `--evidence-dir /path/to/results` to select a receipt/log directory. Without an evidence directory, the UI harness writes to a new system temporary directory.
 The harness can also load the exact pinned Playwright version from
 `CODEX_PRIMARY_RUNTIME_NODE_MODULES` when that runtime is available.
 
@@ -26,8 +26,7 @@ remaining empty across 503 errors and remounts until a successful read, knowledg
 resource pagination beyond 200 entries, an agent's default model,
 account switching after session expiry, explicit credential clearing when a model
 destination changes, mobile navigation, locale and theme.
-Snapshots and hashes are written to `artifacts/screenshots/` and
-`docs/evidence/browser.json`. The binary and web hashes are checked again at exit;
+The UI harness writes screenshots in the selected evidence directory and its report to `browser.json`. The binary and web hashes are checked again at exit;
 a changed build invalidates the result.
 
 The diagnostic worker is a process fixture, not an AI model. This is a bounded

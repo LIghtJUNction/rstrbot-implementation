@@ -25,10 +25,11 @@ assert.equal(playwrightVersion, '1.62.1', 'Use the pinned Playwright version');
 const { chromium } = load('playwright');
 
 const password = 'Browser fixture password 2026!';
-const screenshots = path.join(root, 'artifacts/screenshots');
-const evidence = path.resolve(argument('--evidence-dir', path.join(root, 'docs/evidence')));
+const requestedEvidence = argument('--evidence-dir', '');
+const evidence = requestedEvidence ? path.resolve(requestedEvidence) : await fs.mkdtemp(path.join(os.tmpdir(), 'rstrbot-browser-evidence-'));
+const screenshots = path.join(evidence, 'screenshots');
+const webDir = path.resolve(argument('--web-dir', path.join(root, 'web/dist')));
 await fs.mkdir(screenshots, { recursive: true });
-await fs.mkdir(evidence, { recursive: true });
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 async function filesBelow(directory) {
   const result = [];
@@ -39,7 +40,7 @@ async function filesBelow(directory) {
   }
   return result.sort();
 }
-const inputs = [binary, ...['rstrbot-diagnostic', 'rstrbot-openai', 'rstrbot-webhook'].map(name => path.join(path.dirname(binary), name)), ...await filesBelow(path.join(root, 'web/dist'))];
+const inputs = [binary, ...['rstrbot-diagnostic', 'rstrbot-openai', 'rstrbot-webhook'].map(name => path.join(path.dirname(binary), name)), ...await filesBelow(webDir)];
 async function inputHashes() {
   const hashes = {};
   for (const file of inputs) hashes[file.startsWith(root + path.sep) ? path.relative(root, file) : path.basename(file)] = sha256(await fs.readFile(file));
@@ -58,7 +59,7 @@ const port = listener.address().port; await new Promise(resolve => listener.clos
 const base = `http://127.0.0.1:${port}`;
 const environment = { ...process.env };
 for (const key of Object.keys(environment)) if (key.startsWith('RSTRBOT_')) delete environment[key];
-const server = spawn(binary, ['--data-dir', directory, '--listen', `127.0.0.1:${port}`, '--web-dir', path.join(root, 'web/dist')], { env: environment, detached: os.platform() !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+const server = spawn(binary, ['--data-dir', directory, '--listen', `127.0.0.1:${port}`, '--web-dir', webDir], { env: environment, detached: os.platform() !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
 let serverOutput = '';
 server.stdout.on('data', data => { serverOutput = (serverOutput + data).slice(-200000); });
 server.stderr.on('data', data => { serverOutput = (serverOutput + data).slice(-200000); });
@@ -182,14 +183,18 @@ try {
     await nav('Models');
     await page.getByRole('button', { name: 'Add', exact: true }).first().click();
     await page.getByLabel('Display name').fill('Diagnostic browser model');
-    await page.getByLabel('Provider plugin').selectOption('diagnostic');
+    await page.getByLabel('Model provider').selectOption('diagnostic');
     await page.getByLabel('Model ID', { exact: true }).fill('diagnostic');
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Save configuration', exact: true }).click();
     await page.getByRole('button', { name: 'Diagnostic browser model', exact: true }).waitFor();
     firstModel = (await api('GET', `${wp()}/resources/models`)).items.find(model => model.data.name === 'Diagnostic browser model');
     assert.ok(firstModel);
-    await page.getByRole('button', { name: 'Test', exact: true }).click();
-    await page.getByText('The actual model request succeeded.', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Run model call test: Diagnostic browser model', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm and send actual test call', exact: true }).click();
+    await page.getByText('The server confirmed the test call succeeded.', { exact: true }).waitFor();
+    await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
     await nav('Plugins');
     await page.getByRole('button', { name: 'Add', exact: true }).first().click();
     await page.getByLabel('Instance name').fill('Diagnostic browser tools');
@@ -440,11 +445,13 @@ try {
     await nav('Models'); await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await page.getByRole('button', { name: 'Edit Credential destination fixture', exact: true }).click();
     await page.getByLabel('API base URL').fill(`${endpoint}/model-changed`);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await page.getByRole('alert').filter({ hasText: 'Changing the credential destination' }).waitFor();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByText('The destination changed. Enter a new credential or explicitly clear the saved one.', { exact: true }).waitFor();
     await page.getByLabel('Clear the saved API key', { exact: true }).check();
     assert.equal(await page.getByRole('dialog').locator('input[type=password]').isDisabled(), true);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Save configuration', exact: true }).click();
     await until(async () => !await page.locator('dialog[open]').count(), 'saved credential clearing');
     const changed = await api('GET', `${wp()}/resource/${connection.id}`);
     assert.notEqual(changed.data.has_api_key, true);
@@ -456,12 +463,12 @@ try {
   });
 
   await check('desktop light theme and 320px Chinese navigation fit without horizontal overflow', async () => {
-    await page.getByRole('button', { name: 'Light theme / 浅色主题', exact: true }).click();
+    await page.getByRole('button', { name: 'Switch to light theme', exact: true }).click();
     await assertNoOverflow(); await screenshot('03-chat-light-desktop');
-    await page.getByRole('button', { name: 'Change language / 切换语言', exact: true }).click();
+    await page.getByRole('button', { name: 'Change language', exact: true }).click();
     assert.equal(await page.locator('html').getAttribute('lang'), 'zh-CN');
     await page.setViewportSize({ width: 320, height: 900 });
-    await page.getByRole('button', { name: 'Dark theme / 深色主题', exact: true }).click();
+    await page.getByRole('button', { name: '切换到深色主题', exact: true }).click();
     await assertNoOverflow(); await screenshot('04-chat-dark-zh-320');
     await page.getByRole('button', { name: '打开导航', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: '知识库', exact: true }).click();
@@ -475,7 +482,25 @@ try {
     await page.keyboard.press('Escape');
     await until(async () => !await page.locator('dialog[open]').count(), 'keyboard dismissal');
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByRole('button', { name: 'Change language / 切换语言', exact: true }).click();
+    await page.getByRole('button', { name: '切换语言', exact: true }).click();
+  });
+
+  await check('an active long draft remains visible after portrait and landscape reflow', async () => {
+    await nav('Conversations');
+    await page.setViewportSize({ width: 390, height: 844 });
+    const input = page.getByLabel('Message', { exact: true });
+    const original = await input.inputValue();
+    const draft = Array.from({length: 14}, (_, i) => `Draft line ${i + 1}: keep this synthetic text.`).join('\n') + '\nDraft end marker';
+    await input.fill(draft); await input.focus(); await input.press('End');
+    const state = () => input.evaluate(el => ({ text: el.value, start: el.selectionStart, end: el.selectionEnd, top: el.scrollTop, bottom: el.scrollTop + el.clientHeight, height: el.scrollHeight, focused: document.activeElement === el }));
+    const before = await state();
+    assert.equal(before.text, draft); assert.equal(before.end, draft.length); // Allow for native textarea bottom padding when checking that the final line remains visible.
+    assert.ok(before.bottom >= before.height - 30, JSON.stringify(before));
+    await page.setViewportSize({ width: 844, height: 390 }); await page.setViewportSize({ width: 390, height: 844 });
+    const after = await state();
+    assert.equal(after.text, draft); assert.equal(after.end, draft.length); assert.equal(after.focused, true);
+    assert.ok(after.bottom >= after.height - 30, `Draft end not visible after reflow: ${JSON.stringify({before, after})}`);
+    await input.fill(original); await page.setViewportSize({ width: 1440, height: 1000 });
   });
 
   await check('expired session can sign in as another member without cached private resources or drafts', async () => {
