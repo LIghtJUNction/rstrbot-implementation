@@ -31,3 +31,5 @@ Browser-local drafts and versions are private user state: scope them by instance
 Provider rejection codes `-32041`, `-32043`, and `-32029` have optional 1.0-compatible behavior documented in `docs/PLUGIN_PROTOCOL.md`. Preserve generic fallback for old workers/hosts, do not reveal response bodies, and test each SDK runtime separately. The source lives in the pinned implementation submodule; it is not part of the recipe payload.
 
 1.16 用户确认 MaiBot 为对比对象。首次对话默认不为标题另发模型请求；可选模型标题需用户主动启用并说明请求、费用和数据范围。按RSTRBOT-22核对账本，模拟结果不代表整体领先。
+
+1.17 按 R13-OC-185423 验证可选供应商回退：复用已接纳消息，真冲突和 unknown 禁止回退；没有实现或实际账本时保持 gap/not_executed。
