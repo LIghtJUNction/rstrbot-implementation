@@ -23,6 +23,10 @@ export function Brand({ small = false }: { small?: boolean }) {
 export function ErrorNotice({ error, onRetry, draftPreserved, onReview, onConfigureModels }: { error: unknown; onRetry?: () => void; draftPreserved?: boolean; onReview?: () => void; onConfigureModels?: () => void }) {
   const { t } = useText();
   if (!error) return null;
+  if (error instanceof ApiError && error.code === 'knowledge_index_inconsistent') {
+    const names = error.message.startsWith('Knowledge index inconsistent: ') ? error.message.slice('Knowledge index inconsistent: '.length) : '';
+    return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>{t('资料索引需要修复', 'A source index needs repair')}</strong>{names && <p>{t('需要修复：', 'Needs repair: ')}{names}</p>}<p>{t('模型尚未调用。请在知识库中编辑并重新保存列出的资料，再试一次。', 'No model was called. Edit and re-save the listed sources in Knowledge, then try again.')}</p></div></div>;
+  }
   if (error instanceof ApiError) {
     const guidance = new Map([
       ['provider_authentication_failed', t('模型服务未接受凭据。请检查模型配置中的密钥；如果没有编辑权限，请联系工作区管理员。', 'The model provider rejected the credentials. Check the key in model settings, or contact a workspace administrator if you cannot edit it.')],

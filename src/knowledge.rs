@@ -113,6 +113,56 @@ fn terms(query: &str) -> Vec<String> {
     tokens
 }
 
+/// A ready index must cover its source without gaps and name the same version.
+fn consistent_index(data: &Value, source: &str, chunks: &[Value]) -> bool {
+    if source.is_empty()
+        || source.len() > MAX_SOURCE_BYTES
+        || chunks.is_empty()
+        || chunks.len() > 512
+        || data.get("index_version").and_then(Value::as_u64) != Some(1)
+        || data.get("index_kind").and_then(Value::as_str) != Some("lexical-v1")
+    {
+        return false;
+    }
+    let digest = hex::encode(Sha256::digest(source.as_bytes()));
+    if data.get("source_hash").and_then(Value::as_str) != Some(digest.as_str()) {
+        return false;
+    }
+    let mut previous_start = None;
+    let mut previous_end = 0usize;
+    for (ordinal, chunk) in chunks.iter().enumerate() {
+        let Some((start, end)) = chunk
+            .get("start_byte")
+            .and_then(Value::as_u64)
+            .and_then(|start| usize::try_from(start).ok())
+            .zip(
+                chunk
+                    .get("end_byte")
+                    .and_then(Value::as_u64)
+                    .and_then(|end| usize::try_from(end).ok()),
+            )
+        else {
+            return false;
+        };
+        let expected_id = format!("{}-{ordinal}", &digest[..16]);
+        if start >= end
+            || end - start > CHUNK_BYTES
+            || start > previous_end
+            || previous_start.is_some_and(|prior| start <= prior)
+            || chunk.get("ordinal").and_then(Value::as_u64) != Some(ordinal as u64)
+            || chunk.get("id").and_then(Value::as_str) != Some(expected_id.as_str())
+            || source.get(start..end).is_none()
+            || chunk.get("text").and_then(Value::as_str).is_none()
+            || source.get(start..end) != chunk.get("text").and_then(Value::as_str)
+        {
+            return false;
+        }
+        previous_start = Some(start);
+        previous_end = end;
+    }
+    previous_end == source.len()
+}
+
 /// Retrieve authorized chunks only. Private documents belonging to another
 /// member are excluded by the database query before text is scored.
 pub async fn search(store: &Store, wid: &str, user: &str, query: &str) -> Result<Value, AppError> {
@@ -136,13 +186,16 @@ async fn search_for_audience(
     }
     let tokens = terms(query);
     if tokens.is_empty() {
-        return Ok(json!({"items":[],"method":"lexical","truncated":false}));
+        return Ok(
+            json!({"items":[],"method":"lexical","truncated":false,"degraded":false,"degraded_reason":null,"inconsistent_documents":[]}),
+        );
     }
     let mut truncated = false;
     let mut matches: Vec<(usize, String, Value)> = Vec::new();
     let phrase = query.to_lowercase();
     let mut scanned_bytes = 0usize;
     let mut scan_limited = false;
+    let mut inconsistent_candidates = Vec::new();
     'pages: for offset in (0..MAX_DOCUMENTS).step_by(16) {
         let count = (MAX_DOCUMENTS - offset).min(16);
         let documents = store
@@ -161,9 +214,11 @@ async fn search_for_audience(
                 continue;
             }
             let Some(source) = document.data.get("text").and_then(Value::as_str) else {
+                inconsistent_candidates.push((document.id.clone(), document.version));
                 continue;
             };
             if source.len() > MAX_SOURCE_BYTES {
+                inconsistent_candidates.push((document.id.clone(), document.version));
                 continue;
             }
             scanned_bytes += source.len();
@@ -178,8 +233,13 @@ async fn search_for_audience(
                 .unwrap_or("Untitled");
             let title_lower = title.to_lowercase();
             let Some(chunks) = document.data.get("chunks").and_then(Value::as_array) else {
+                inconsistent_candidates.push((document.id.clone(), document.version));
                 continue;
             };
+            if !consistent_index(&document.data, source, chunks) {
+                inconsistent_candidates.push((document.id.clone(), document.version));
+                continue;
+            }
             for chunk in chunks.iter().take(512) {
                 let (Some(start), Some(end), Some(text)) = (
                     chunk.get("start_byte").and_then(Value::as_u64),
@@ -234,6 +294,29 @@ async fn search_for_audience(
     // Recheck membership after potentially expensive scoring. Database reads
     // and emission are separate moments; each later engine action also checks.
     store.membership(wid, user).await?;
+    let mut inconsistent_documents = Vec::new();
+    for (id, version) in inconsistent_candidates {
+        match store.get_resource(wid, user, &id).await {
+            Ok(current)
+                if current.version == version
+                    && (audience != Visibility::Workspace
+                        || current.visibility == Visibility::Workspace)
+                    && current.data.get("enabled") != Some(&Value::Bool(false))
+                    && current.data.get("archived") != Some(&Value::Bool(true))
+                    && current.data.get("state").and_then(Value::as_str) == Some("ready") =>
+            {
+                let title = current
+                    .data
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id);
+                inconsistent_documents.push(json!({"id":id,"title":title}));
+            }
+            Ok(_) | Err(rstrbot_store::Error::NotFound) | Err(rstrbot_store::Error::Forbidden) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let inconsistent = !inconsistent_documents.is_empty();
     let mut items = Vec::new();
     for (_, _, item) in matches {
         let Some(id) = item["document_id"].as_str() else {
@@ -254,7 +337,8 @@ async fn search_for_audience(
         }
     }
     Ok(
-        json!({"items":items,"method":"lexical","truncated":truncated||scan_limited,
+        json!({"items":items,"method":"lexical","truncated":truncated||scan_limited,"degraded":inconsistent,
+        "degraded_reason":if inconsistent { Some("index_inconsistent") } else { None },"inconsistent_documents":inconsistent_documents,
         "limits":{"documents":MAX_DOCUMENTS,"scanned_source_bytes":16*1024*1024,"results":MAX_RESULTS}}),
     )
 }
@@ -279,6 +363,21 @@ pub async fn contexts(
         return Ok(Vec::new());
     }
     let result = search_for_audience(store, wid, user, query, audience).await?;
+    if result["degraded"] == true {
+        let names = result["inconsistent_documents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(5)
+            .filter_map(|item| item["title"].as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::new(
+            axum::http::StatusCode::CONFLICT,
+            "knowledge_index_inconsistent",
+            format!("Knowledge index inconsistent: {names}"),
+        ));
+    }
     Ok(result["items"]
         .as_array()
         .map(|items| {
@@ -308,6 +407,34 @@ pub async fn contexts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn integrity_check_detects_stale_or_incomplete_index_without_rejecting_valid_unicode() {
+        let text = "段落🙂 source.\n".repeat(700);
+        let valid = validate_and_index(json!({"title":"Source","text":text})).unwrap();
+        let check = |value: &Value| {
+            consistent_index(
+                value,
+                value["text"].as_str().unwrap(),
+                value["chunks"].as_array().unwrap(),
+            )
+        };
+        assert!(check(&valid));
+        let mut changed = valid.clone();
+        changed["chunks"][0]["text"] = json!("stale");
+        assert!(!check(&changed));
+        let mut missing_end = valid.clone();
+        missing_end["chunks"].as_array_mut().unwrap().pop();
+        assert!(!check(&missing_end));
+        let mut missing_id = valid.clone();
+        missing_id["chunks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("id");
+        assert!(!check(&missing_id));
+        let mut missing_hash = valid.clone();
+        missing_hash.as_object_mut().unwrap().remove("source_hash");
+        assert!(!check(&missing_hash));
+    }
     #[test]
     fn unicode_chunks_are_bounded_and_source_exact() {
         let text = "段落与引文🙂，不会切坏 UTF-8。\n".repeat(500);
