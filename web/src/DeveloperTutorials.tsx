@@ -75,7 +75,7 @@ export default function DeveloperTutorials({ user }: { user: User }) {
         <div><span>{t('消息渠道', 'Message channel')}</span><div><code>webhook</code><p>{t('当前路由适配器。启用前要经过实例网络目标审批。', 'Current route adapter. An instance administrator must approve the network destination before it is enabled.')}</p></div></div>
       </div>
       <div className="developer-caution"><ShieldCheck size={17} aria-hidden="true" /><p>{t('模型“测试”会发起真实请求，可能产生费用。当前渠道没有无副作用的连通性测试；不要把“测试成功”按钮做成摆设。', 'Model “test” sends a real request and may incur a charge. Channels have no side-effect-free connectivity test today; do not add a pretend test button.')}</p></div>
-      <div className="developer-caution"><ShieldCheck size={17} aria-hidden="true" /><p>{t('发送结果未确认时先核对会话和运行记录。刷新后可用原正文、模型和代理继续同一意图；换内容或配置要明确开始新意图。浏览器禁止本地存储时会暂停发送。', 'When a send is unconfirmed, review the conversation and run records first. After refresh, continue the same intent with the original text, model and agent; changing them requires confirming a new intent. Sending pauses if browser storage is unavailable.')}</p></div>
+      <div className="developer-caution"><ShieldCheck size={17} aria-hidden="true" /><p>{t('发送结果未确认时先核对会话和运行记录。刷新后可用原正文、模型和代理继续同一意图；换内容或配置要明确开始新意图。浏览器禁止本地存储或不支持同源标签页协调时会暂停发送；请使用 HTTPS 或本机地址。', 'When a send is unconfirmed, review the conversation and run records first. After refresh, continue the same intent with the original text, model and agent; changing them requires confirming a new intent. Sending pauses if browser storage or same-origin tab coordination is unavailable; use HTTPS or a local address.')}</p></div>
       <SourceLink path="recipes/rstrbot-core/HTTP_CONTRACT.md">{t('查看完整 HTTP 契约', 'Read the full HTTP contract')}</SourceLink>
     </section>
 

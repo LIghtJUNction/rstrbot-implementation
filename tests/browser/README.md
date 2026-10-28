@@ -99,3 +99,5 @@ Run this command from the implementation root. It starts and removes its own sys
 ## Unconfirmed chat recovery
 
 `verify_feedback.mjs` accepts `--web-dir /path/to/dist`. Its chat checks drop an accepted response or a request before it reaches the core, reload, and verify that manual continuation reuses the request while reconnect itself sends nothing. It also covers changed text/model/agent, explicit new intent, late acknowledgement and browser storage denial against the isolated core and diagnostic worker. This does not establish cross-device or simultaneously sending tab coordination.
+
+The chat-recovery checks also exercise two concurrent tabs, a stale confirmation, and unavailable browser locks. These tests use same-origin Chromium and do not prove cross-device coordination.

@@ -229,14 +229,16 @@ try {
     await until(async () => (await page.getByLabel('消息', { exact: true }).inputValue()) === '', 'manual retry accepted');
     await page.setViewportSize({ width: 1280, height: 900 });
   });
-  await check('English existing-chat offline retry keeps its idempotent intent and sends exactly once', async () => {
+  await check('English existing-chat interrupted request keeps its idempotent intent and sends exactly once', async () => {
     await page.getByRole('button', { name: '切换语言', exact: true }).click();
     await until(async () => (await page.getByRole('button', { name: 'Stop', exact: true }).count()) === 0, 'first run done');
+    await until(async () => !(await api('GET', `${wp}/resources/runs`)).items.some(r => ['running', 'queued'].includes(r.data.status)), 'first run terminal before going offline');
     await page.getByLabel('Message', { exact: true }).fill('REPAIR-OFFLINE-EXISTING');
-    await context.setOffline(true); await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await until(async () => await page.getByRole('button', { name: 'Send message', exact: true }).isEnabled(), 'composer ready before going offline');
+    await page.route('**/chat', route => route.abort('failed'), { times: 1 }); await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await page.getByText('Connection interrupted; result unconfirmed', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('Message', { exact: true }).inputValue(), 'REPAIR-OFFLINE-EXISTING');
-    await context.setOffline(false); await page.getByRole('button', { name: 'Review conversation records', exact: true }).click();
+    await page.getByRole('button', { name: 'Review conversation records', exact: true }).click();
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
     await until(async () => (await page.getByLabel('Message', { exact: true }).inputValue()) === '', 'existing retry');
   });
@@ -325,6 +327,80 @@ try {
     await until(async () => (await api('GET', `${wp}/resources/runs`)).items.length === before + 1, 'manual continuation admitted');
     assert.deepEqual(retriedBody, firstBody);
     await until(async () => !(await api('GET', `${wp}/resources/runs`)).items.some(r => ['running', 'queued'].includes(r.data.status)), 'continued run terminal');
+  });
+  await check('a stale second-tab confirmation cannot discard a newer pending intent', async () => {
+    await until(async () => !(await api('GET', `${wp}/resources/runs`)).items.some(r => ['running', 'queued'].includes(r.data.status)), 'previous run terminal');
+    const conversationId = (await api('GET', `${wp}/resources/conversations`)).items.find(c => c.data.title === 'REPAIR-OFFLINE-NEW').id;
+    const userId = (await api('GET', '/auth/me')).user.id;
+    const key = `rstrbot:chat-intent:${userId}:${workspace}:${conversationId}`;
+    const lose = async () => page.route('**/chat', async route => { const accepted = await route.fetch(); assert.equal(accepted.status(), 200); await route.abort('failed'); }, { times: 1 });
+    await lose(); await page.getByLabel('Message', { exact: true }).fill('ORIGINAL-INTENT-TAB');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await page.getByText('Connection interrupted; result unconfirmed', { exact: true }).waitFor();
+    await until(async () => !(await api('GET', `${wp}/resources/runs`)).items.some(r => ['running', 'queued'].includes(r.data.status)), 'original terminal');
+    const second = await context.newPage(); await second.goto(base); await second.locator('.app-shell').waitFor();
+    await second.getByRole('button', { name: 'REPAIR-OFFLINE-NEW', exact: true }).click();
+    await second.getByRole('button', { name: 'Start a new send intent', exact: true }).click();
+    await page.getByRole('button', { name: 'Start a new send intent', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm new intent', exact: true }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await until(async () => (await page.evaluate(k => localStorage.getItem(k), key)) === null, 'old intent removed');
+    await lose(); await page.getByLabel('Message', { exact: true }).fill('NEWER-INTENT-TAB');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await page.getByText('Connection interrupted; result unconfirmed', { exact: true }).waitFor();
+    await until(async () => { const raw = await page.evaluate(k => localStorage.getItem(k), key); return raw && JSON.parse(raw).text === 'NEWER-INTENT-TAB'; }, 'newer intent persisted');
+    const newer = await page.evaluate(k => localStorage.getItem(k), key); assert.ok(newer);
+    await second.getByRole('button', { name: 'Confirm new intent', exact: true }).click();
+    const after = await page.evaluate(k => localStorage.getItem(k), key);
+    assert.equal(after, newer, 'an old confirmation must not delete the newer pending intent');
+    await second.getByText('The pending request changed in another tab. Review it again.', { exact: true }).waitFor();
+    await second.close();
+    await until(async () => !(await api('GET', `${wp}/resources/runs`)).items.some(r => ['running', 'queued'].includes(r.data.status)), 'newer run terminal');
+    const before = (await api('GET', `${wp}/resources/runs`)).items.length;
+    await page.reload(); await page.locator('.app-shell').waitFor();
+    await page.getByRole('button', { name: 'REPAIR-OFFLINE-NEW', exact: true }).click();
+    assert.equal(await page.getByLabel('Message', { exact: true }).inputValue(), 'NEWER-INTENT-TAB');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    await until(async () => (await page.getByLabel('Message', { exact: true }).inputValue()) === '', 'newer intent reconciled');
+    assert.equal((await api('GET', `${wp}/resources/runs`)).items.length, before);
+    const messages = (await api('GET', `${wp}/conversations/${conversationId}/messages`)).items;
+    assert.equal(messages.filter(m => m.role === 'user' && m.content === 'NEWER-INTENT-TAB').length, 1);
+  });
+  await check('simultaneous different sends do not overwrite a pending request in two tabs', async () => {
+    const fresh = await api('POST', `${wp}/resources/conversations`, { visibility: 'private', data: { title: 'CONCURRENT-TAB-CHECK' } });
+    await page.reload(); await page.locator('.app-shell').waitFor();
+    await page.getByRole('button', { name: 'CONCURRENT-TAB-CHECK', exact: true }).click();
+    await page.locator('.composer-selects select').first().selectOption(model.id);
+    const other = await context.newPage(); await other.goto(base); await other.locator('.app-shell').waitFor();
+    await other.getByRole('button', { name: 'CONCURRENT-TAB-CHECK', exact: true }).click();
+    await other.locator('.composer-selects select').first().selectOption(model.id);
+    await page.getByLabel('Message', { exact: true }).fill('CONCURRENT-A');
+    await other.getByLabel('Message', { exact: true }).fill('CONCURRENT-B');
+    await until(async () => await page.getByRole('button', { name: 'Send message', exact: true }).isEnabled() && await other.getByRole('button', { name: 'Send message', exact: true }).isEnabled(), 'both tabs ready');
+    let release; const gate = new Promise(resolve => { release = resolve; }); gates.push({ release }); let count = 0;
+    const pattern = '**/chat';
+    await context.route(pattern, async route => { count++; const response = await route.fetch(); await gate; await route.fulfill({ response }); });
+    try {
+      await Promise.all([page.getByLabel('Message', { exact: true }).press('Enter'), other.getByLabel('Message', { exact: true }).press('Enter')]);
+      await until(() => count >= 1, 'one chat request'); await new Promise(resolve => setTimeout(resolve, 700));
+      assert.equal(count, 1, 'only one conflicting intent may be sent while the first receipt is pending');
+      release(); await until(async () => (await api('GET', `${wp}/conversations/${fresh.id}/messages`)).items.some(m => m.role === 'user'), 'concurrent result');
+      const messages = (await api('GET', `${wp}/conversations/${fresh.id}/messages`)).items;
+      assert.equal(messages.filter(m => m.role === 'user').length, 1);
+    } finally { release(); await context.unroute(pattern); await other.close(); }
+  });
+  await check('unavailable browser coordination stops a send before the core receives it', async () => {
+    const denied = await browser.newContext({ locale: 'en-US' }); await denied.addCookies(await context.cookies());
+    await denied.addInitScript(() => { Object.defineProperty(Navigator.prototype, 'locks', { configurable: true, get: () => undefined }); });
+    const p = await denied.newPage(); await p.goto(base); await p.locator('.app-shell').waitFor();
+    await p.getByRole('button', { name: 'REPAIR-OFFLINE-NEW', exact: true }).click();
+    await p.getByLabel('Message', { exact: true }).fill('NO-LOCKS-MUST-NOT-SEND');
+    const before = (await api('GET', `${wp}/resources/runs`)).items.length;
+    await p.getByRole('button', { name: 'Send message', exact: true }).click();
+    await p.getByText('This browser cannot safely coordinate tabs', { exact: false }).waitFor();
+    assert.equal((await api('GET', `${wp}/resources/runs`)).items.length, before);
+    assert.equal(await p.getByLabel('Message', { exact: true }).inputValue(), 'NO-LOCKS-MUST-NOT-SEND');
+    await denied.close();
   });
   await check('storage denial stops a send before the core receives it and keeps the draft', async () => {
     const denied = await browser.newContext({ locale: 'en-US' });
