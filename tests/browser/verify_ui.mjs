@@ -205,6 +205,60 @@ try {
     assert.equal((await api('GET', `${wp()}/resources/plugins`)).items.find(plugin => plugin.data.name === 'Diagnostic browser tools').data.enabled, true);
   });
 
+  await check('reselecting the current workspace keeps an in-flight model read and can send', async () => {
+    let received, release;
+    const ready = new Promise(resolve => { received = resolve; });
+    const released = new Promise(resolve => { release = resolve; });
+    const pattern = `**/api/v1/workspaces/${workspace}/resource/${firstModel.id}`;
+    let modelRequests = 0;
+    await page.route(pattern, async route => {
+      modelRequests++;
+      const response = await route.fetch(); received(); await released;
+      try { await route.fulfill({ response }); } catch { /* An unexpected cancellation is detected below. */ }
+    });
+    try {
+      await page.reload(); await page.locator('.app-shell').waitFor();
+      await Promise.race([ready, wait(15000).then(() => { throw new Error('Model read was not observed'); })]);
+      await page.getByLabel('Switch workspace', { exact: true }).selectOption(workspace);
+      release();
+      await page.getByLabel('Message', { exact: true }).fill('same-workspace model read sentinel');
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      const run = await until(async () => (await api('GET', `${wp()}/resources/runs`)).items.find(item => item.data.status === 'completed' && item.data.content.includes('same-workspace model read sentinel')), 'same-workspace model run');
+      const conversation = await api('GET', `${wp()}/resource/${run.data.conversation_id}`);
+      const messages = await api('GET', `${wp()}/conversations/${conversation.id}/messages`);
+      assert.equal(messages.items.filter(item => item.role === 'user' && item.content === 'same-workspace model read sentinel').length, 1);
+      assert.equal((await api('GET', `${wp()}/resources/runs`)).items.filter(item => item.data.conversation_id === conversation.id).length, 1);
+      assert.ok(modelRequests >= 1);
+    } finally { release(); await page.unroute(pattern); }
+  });
+
+  await check('changing workspace during a model read preserves isolation and the old draft', async () => {
+    const target = await api('POST', '/workspaces', { name: 'Model read isolation workspace' }, [200, 201]);
+    const targetId = target.workspace?.id ?? target.id;
+    let received, release;
+    const ready = new Promise(resolve => { received = resolve; });
+    const released = new Promise(resolve => { release = resolve; });
+    const pattern = `**/api/v1/workspaces/${workspace}/resource/${firstModel.id}`;
+    await page.route(pattern, async route => {
+      const response = await route.fetch(); received(); await released;
+      try { await route.fulfill({ response }); } catch { /* Leaving cancels the old read. */ }
+    });
+    try {
+      await page.reload(); await page.locator('.app-shell').waitFor();
+      await Promise.race([ready, wait(15000).then(() => { throw new Error('Model read was not observed'); })]);
+      const before = (await api('GET', `${wp()}/resources/runs`)).items.length;
+      await page.getByLabel('Message', { exact: true }).fill('private draft for original workspace');
+      await page.getByLabel('Switch workspace', { exact: true }).selectOption(targetId);
+      await page.locator('.topbar-workspace').filter({ hasText: 'Model read isolation workspace' }).waitFor();
+      release();
+      assert.equal(await page.getByLabel('Message', { exact: true }).inputValue(), '');
+      assert.equal(await page.getByLabel('Select model').locator(`option[value="${firstModel.id}"]`).count(), 0);
+      assert.equal((await api('GET', `${wp()}/resources/runs`)).items.length, before);
+      await page.getByLabel('Switch workspace', { exact: true }).selectOption(workspace);
+      assert.equal(await page.getByLabel('Message', { exact: true }).inputValue(), 'private draft for original workspace');
+    } finally { release(); await page.unroute(pattern); }
+  });
+
   await check('failed scheduled execution shows its actual result and opens the authorized run', async () => {
     const conversation = await create('conversations', { title: 'Schedule outcome fixture' });
     const document = await create('knowledge', { title: 'Schedule damaged index', text: 'schedule-outcome fixture' });
@@ -679,8 +733,14 @@ try {
     // query cache is present when authentication expires in an open tab.
     await nav('Knowledge');
     await api('POST', '/auth/logout', {}, [200, 204]);
-    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor({ timeout: 20000 });
+    const signIn = page.getByRole('button', { name: 'Sign in', exact: true });
+    // Logout can already notify this tab and unmount the page. Otherwise use
+    // a read to discover expiry. Either path must reach the actual login form.
+    if (!await signIn.isVisible()) {
+      try { await page.getByRole('button', { name: 'Refresh', exact: true }).click({ timeout: 3000 }); }
+      catch (error) { if (!await signIn.isVisible()) throw error; }
+    }
+    await signIn.waitFor({ timeout: 20000 });
     await page.getByLabel('Username or verified email', { exact: true }).fill('browser_bob');
     await page.getByLabel('Password', { exact: false }).fill(password);
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();

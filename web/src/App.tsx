@@ -148,7 +148,7 @@ function Shell({ user, verifyToken, clearVerifyToken }: { user: User; verifyToke
     return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeOnEscape); };
   }, [openNavigationGroup]);
   function go(id: Page) { setLinkedRun(null); setPage(id); setDrawer(false); setOpenNavigationGroup(null); setError(null); if (!verifyToken) history.replaceState(null, '', `${location.pathname}${location.search}${['account', 'auth-settings'].includes(id) ? `#${id}` : ''}`); }
-  async function switchWorkspace(id: string) { setLinkedRun(null); await client.cancelQueries({ queryKey: [wid] }); setWid(id); savePreference(`workspace:${user.id}`, id); setDrawer(false); setError(null); }
+  async function switchWorkspace(id: string) { if (id === wid) { setDrawer(false); return; } setLinkedRun(null); await client.cancelQueries({ queryKey: [wid] }); setWid(id); savePreference(`workspace:${user.id}`, id); setDrawer(false); setError(null); }
   async function logout() { setError(null); try { await post('/auth/logout'); await client.cancelQueries(); client.clear(); window.location.assign('/'); } catch (err) { setError(err); } }
   async function create(event: React.FormEvent) {
     event.preventDefault(); setBusy(true); setError(null);

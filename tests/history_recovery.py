@@ -2,8 +2,9 @@
 """Restart a real SQLite core with more than 10,000 durable records per kind.
 
 Synthetic historical receipts are inserted while the core is stopped. The test
-then observes the public API and the persisted database, including unfinished
-records beyond the old scan limit. No model or external destination is called.
+then observes the public API and persisted database, including unfinished
+records beyond the old scan limit. Explicit chats use a local diagnostic worker;
+no commercial model or external destination is called.
 """
 import argparse
 import datetime
@@ -16,7 +17,7 @@ import tempfile
 import time
 import traceback
 
-from integration import Client, Instance, PASSWORD, ROOT, wait_for
+from integration import Client, Instance, PASSWORD, ROOT, TERMINAL, wait_for
 
 
 def exercise(binary, report):
@@ -40,6 +41,15 @@ def exercise(binary, report):
                     "name": "Recovery diagnostic fixture", "provider": "diagnostic", "model": "diagnostic",
                 },
             })
+            original = client.post(base + '/chat', {'conversation_id': conversation['id'], 'model_id': model['id'],
+                                   'content': 'history-before-restart', 'idempotency_key': 'history-before-restart'})
+            previous = wait_for(lambda: client.get(base + '/runs/' + original['run']['id']),
+                                lambda item: item['data']['status'] in TERMINAL)
+            assert previous['data']['status'] == 'completed'
+            wait_for(lambda: client.get(base + '/resource/' + conversation['id']),
+                     lambda item: not item['data'].get('active_run'))
+            before_messages = client.get(base + '/conversations/' + conversation['id'] + '/messages')['items']
+            assert any(message.get('content') == 'history-before-restart' for message in before_messages)
             schedule_template = client.post(base + "/resources/schedules", {
                 "visibility": "private", "data": {
                     "title": "Valid paused task", "prompt": "must not redispatch",
@@ -99,11 +109,24 @@ def exercise(binary, report):
             assert schedule["data"]["conversation_id"] == conversation["id"]
             with sqlite3.connect(instance.directory / "rstrbot.db") as database:
                 assert database.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == operations_before
-                assert database.execute("SELECT COUNT(*) FROM resources WHERE kind='runs'").fetchone()[0] == historical_count + 1
+                assert database.execute("SELECT COUNT(*) FROM resources WHERE kind='runs'").fetchone()[0] == historical_count + 2
                 for kind in ("runs", "deliveries", "schedules"):
                     count = database.execute("SELECT COUNT(*) FROM resources WHERE kind=? AND id LIKE 'history-%'", (kind,)).fetchone()[0]
                     assert count == historical_count, (kind, count)
             report["checks"].append("valid in-flight schedules beyond the old limit retain their original claim and parameters; all history remains and no new operation or run is admitted")
+            assert client.get(base + '/conversations/' + conversation['id'] + '/messages')['items'] == before_messages
+            resumed = client.post(base + '/chat', {'conversation_id': conversation['id'], 'model_id': model['id'],
+                                  'content': 'history-after-restart', 'idempotency_key': 'history-after-restart'})
+            fresh = wait_for(lambda: client.get(base + '/runs/' + resumed['run']['id']),
+                             lambda item: item['data']['status'] in TERMINAL)
+            assert fresh['data']['status'] == 'completed'
+            messages = client.get(base + '/conversations/' + conversation['id'] + '/messages')['items']
+            assert all(message in messages for message in before_messages)
+            assert sum(message.get('content') == 'history-after-restart' for message in messages) == 1
+            assert client.get(base + '/runs/' + pending_run)['data']['status'] == 'interrupted'
+            with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                assert database.execute('SELECT COUNT(*) FROM operations').fetchone()[0] == operations_before + 1
+            report['checks'].append('same conversation retains prior messages and accepts one explicit new diagnostic run after recovery without replaying the interrupted run')
         finally:
             instance.stop()
 
@@ -117,7 +140,7 @@ def main():
     report = {
         "status": "running", "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "platform": platform.platform(), "database": "sqlite", "checks": [],
-        "scope": "real SQLite restart with synthetic historical receipts; no model or destination calls",
+        "scope": "real SQLite restart with synthetic receipts and explicit local diagnostic calls; no commercial model or destination calls",
         "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "binary_sha256": {name: hashlib.sha256((binary.parent / name).read_bytes()).hexdigest()
                           for name in ("rstrbot", "rstrbot-openai", "rstrbot-diagnostic", "rstrbot-webhook")},

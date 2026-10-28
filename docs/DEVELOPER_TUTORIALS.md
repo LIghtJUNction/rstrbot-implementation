@@ -105,3 +105,7 @@ mise exec -- ./scripts/check.sh
 For scheduled work, inspect the latest run result separately from the next scheduled occurrence. An interrupted claim requires reviewing its run and destination before any new intention; restart does not automatically replay it. Exercise the local crash and request-ledger scenario with `python3 tests/schedule_outcomes.py` after building the core.
 
 Interrupted schedules can be reviewed by their owner with current member permissions. The confirmation records the old claim and leaves the schedule paused; it does not establish the old model or delivery outcome. Enable a recurring plan separately for a future occurrence. For an expired one-time plan, edit the time before enabling. Check `tests/schedule_outcomes.py` for the request ledger and authorization boundaries.
+
+When changing workspaces, reselecting the current workspace must leave in-flight reads alone. The local browser acceptance suite delays an authorized model read, reselects the same workspace and checks an actual diagnostic run; it also checks that leaving for a different workspace does not dispatch an abandoned chat.
+
+`python3 tests/history_recovery.py` exercises a large synthetic recovery history and verifies that an explicitly started new diagnostic run continues the same conversation after an interrupted run, retaining its earlier messages. It does not establish external delivery or multi-node recovery.
