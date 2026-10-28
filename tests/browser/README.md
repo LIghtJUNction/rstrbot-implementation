@@ -101,3 +101,7 @@ Run this command from the implementation root. It starts and removes its own sys
 `verify_feedback.mjs` accepts `--web-dir /path/to/dist`. Its chat checks drop an accepted response or a request before it reaches the core, reload, and verify that manual continuation reuses the request while reconnect itself sends nothing. It also covers changed text/model/agent, explicit new intent, late acknowledgement and browser storage denial against the isolated core and diagnostic worker. This does not establish cross-device or simultaneously sending tab coordination.
 
 The chat-recovery checks also exercise two concurrent tabs, a stale confirmation, and unavailable browser locks. These tests use same-origin Chromium and do not prove cross-device coordination.
+
+## Delivery recovery
+
+Run `node tests/browser/verify_delivery_ui.mjs --chromium /absolute/path/to/chromium` after building the WebUI and binaries. It creates a temporary core and loopback HTTP receiver, drops acknowledgements, and counts received requests while exercising explicit recovery, multiple tabs, reload, legacy session state, storage refusal and unavailable browser locks. The receiver is a fixture; this does not establish delivery across devices or after browser data is cleared.

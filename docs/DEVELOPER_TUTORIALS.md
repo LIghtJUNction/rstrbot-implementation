@@ -109,3 +109,5 @@ Interrupted schedules can be reviewed by their owner with current member permiss
 When changing workspaces, reselecting the current workspace must leave in-flight reads alone. The local browser acceptance suite delays an authorized model read, reselects the same workspace and checks an actual diagnostic run; it also checks that leaving for a different workspace does not dispatch an abandoned chat.
 
 `python3 tests/history_recovery.py` exercises a large synthetic recovery history and verifies that an explicitly started new diagnostic run continues the same conversation after an interrupted run, retaining its earlier messages. It does not establish external delivery or multi-node recovery.
+
+投递恢复：接收端已收到请求但确认丢失时，先核对接收端；继续原请求保留编号，明确创建新消息并发送才会开始新投递。浏览器无法保存或协调投递时停止发送并保留输入；记录仅在当前浏览器站点存储中恢复，清除站点数据或换设备不受保障。回归使用 `node tests/browser/verify_delivery_ui.mjs --chromium /usr/bin/chromium`，检查独立接收端实际收到的次数。
