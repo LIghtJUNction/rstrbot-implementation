@@ -95,3 +95,7 @@ node tests/browser/verify_configuration.mjs --chromium /absolute/path/to/chromiu
 ```
 
 Run this command from the implementation root. It starts and removes its own system-temp SQLite fixture, prints checks and input hashes to stdout, and creates no checkout output directory. It verifies field labels, inline step errors, keyboard submission, cancellation and stale discovery results, single-flight saving, exact prices, a disabled Webhook at 320px, and the current embedded recipe prompt with preserved browser drafts. Diagnostic discovery uses the actual core/plugin; delayed response cases intercept HTTP. No commercial provider or external delivery is exercised.
+
+## Unconfirmed chat recovery
+
+`verify_feedback.mjs` accepts `--web-dir /path/to/dist`. Its chat checks drop an accepted response or a request before it reaches the core, reload, and verify that manual continuation reuses the request while reconnect itself sends nothing. It also covers changed text/model/agent, explicit new intent, late acknowledgement and browser storage denial against the isolated core and diagnostic worker. This does not establish cross-device or simultaneously sending tab coordination.

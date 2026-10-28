@@ -164,3 +164,7 @@ Model-provider HTTP 401, 403 and 429 are exposed as `provider_authentication_fai
 ## 会话模型绑定（1.18）
 
 成功接纳聊天运行时，会话元数据的可选 `last_model_id` 与用户消息和运行在同一事务写入；幂等重放不改变已有绑定。旧会话可能没有该字段。共享会话使用私有模型会被拒绝，拒绝不创建用户消息或运行；模型删除或失去访问权时客户端必须要求重新选择。
+
+## Browser recovery after an unconfirmed chat admission
+
+The Web client persists the exact chat request intent under the current origin, user, workspace and conversation before dispatch. A manual continuation with identical content, model and agent reuses the same idempotency key; it does not automatically resend. A different intent requires explicit confirmation after reviewing records. If browser storage is unavailable, the UI pauses sending. Server-side admission remains authoritative; pending browser records do not bypass workspace or resource permissions. The single-browser tests do not establish atomic coordination between simultaneously sending tabs or across devices.

@@ -6,6 +6,8 @@ import type { Event, Message, Resource, User, Workspace } from './api';
 import { collectionPath, resourcePath, safePreference, savePreference, useMessages, useResource, useResources, workspacePath } from './data';
 import { acknowledgeDraft, applyEventPage, emptyStream, normalizeMessages } from './conversation';
 import type { StreamState } from './conversation';
+import { clearChatIntent, readChatIntent, saveChatIntent } from './chatIntent';
+import type { IntentState } from './chatIntent';
 import { canWriteResource, roleAllows } from './permissions';
 import { Brand, Button, Empty, ErrorNotice, Field, Loading, LoadMore, Modal, Status, useText } from './ui';
 
@@ -65,7 +67,8 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
   const [busy, setBusy] = useState(false); const [error, setError] = useState<unknown>(null); const [settings, setSettings] = useState(false); const [title, setTitle] = useState('');
   const [system, setSystem] = useState(''); const [visibility, setVisibility] = useState('private'); const [sidebar, setSidebar] = useState(false); const [conversationCollapsed, setConversationCollapsed] = useState(() => safePreference(`conversation-list-collapsed:${user.id}:${wid}`) === 'true'); const [confirm, setConfirm] = useState<'reset' | 'delete' | null>(null);
   const [branch, setBranch] = useState<Message | null>(null); const [branchText, setBranchText] = useState(''); const [hasNew, setHasNew] = useState(false);
-  const idempotency = useRef<{ text: string; key: string } | null>(null); const messagesRef = useRef<HTMLDivElement>(null); const follow = useRef(true); const composing = useRef(false); const viewGeneration = useRef(0);
+  const [pendingIntent, setPendingIntent] = useState<IntentState>({ kind: 'none' }); const [discardIntent, setDiscardIntent] = useState(false);
+  const messagesRef = useRef<HTMLDivElement>(null); const follow = useRef(true); const composing = useRef(false); const viewGeneration = useRef(0);
   const modelRestoredFor = useRef<string | null>(null);
   const draftVersion = useRef({ text: draft, revision: 0 });
   const readingPositions = useRef(new Map<string, { top: number; following: boolean }>());
@@ -81,6 +84,9 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
   const chosenModel = useResource(wid, model || null);
   const modelAllowed = chosenModel.data?.kind === 'models' && (!sharedConversation || chosenModel.data.visibility === 'workspace');
   const modelAvailable = !!model && !chosenModel.unavailable && !chosenModel.error && modelAllowed && chosenModel.data?.id === model;
+  const pendingMismatch = pendingIntent.kind === 'pending' && (pendingIntent.intent.text !== draft.trim() || pendingIntent.intent.modelId !== model || pendingIntent.intent.agentId !== agent);
+  const pendingModel = pendingIntent.kind === 'pending' ? (models.data ?? []).find(item => item.id === pendingIntent.intent.modelId) : undefined;
+  const pendingAgent = pendingIntent.kind === 'pending' ? (agents.data ?? []).find(item => item.id === pendingIntent.intent.agentId) : undefined;
   const selectableModels = (models.data ?? []).filter(item => !sharedConversation || item.visibility === 'workspace');
   const modelOptions = modelAllowed && chosenModel.data && !selectableModels.some(item => item.id === model) ? [...selectableModels, chosenModel.data] : selectableModels;
   const activeRunId = value(conversation.data?.data ?? {}, 'active_run');
@@ -116,8 +122,12 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
     restoreReadingPosition.current = true; olderPageAnchor.current = null;
     const text = safePreference(`${draftPrefix}:${id ?? 'new'}`);
     viewGeneration.current += 1; draftVersion.current = { text, revision: draftVersion.current.revision + 1 };
-    modelRestoredFor.current = null; setModel(''); setAgent('');
-    setBusy(false); setSelected(id); setDraft(text); follow.current = true; setHasNew(false); idempotency.current = null; setSidebar(false); setError(null); setConfirm(null); setBranch(null);
+    const pending = id ? readChatIntent(user.id, wid, id) : { kind: 'none' } as const;
+    setPendingIntent(pending); setDiscardIntent(false);
+    modelRestoredFor.current = pending.kind === 'pending' ? id : null;
+    setModel(pending.kind === 'pending' ? pending.intent.modelId : '');
+    setAgent(pending.kind === 'pending' ? pending.intent.agentId : '');
+    setBusy(false); setSelected(id); setDraft(text); follow.current = true; setHasNew(false); setSidebar(false); setError(null); setConfirm(null); setBranch(null);
   }
   const lastMessage = messages.at(-1);
   const latestMessageIdentity = `${lastMessage?.id ?? ''}:${lastMessage?.content ?? ''}`;
@@ -162,8 +172,6 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
     setBusy(true); setError(null);
     const generation = viewGeneration.current;
     const submittedRevision = draftVersion.current.revision;
-    if (!idempotency.current || idempotency.current.text !== text) idempotency.current = { text, key: crypto.randomUUID() };
-    const intent = idempotency.current;
     try {
       let conversationId = selected;
       if (!conversationId) {
@@ -177,14 +185,23 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
         savePreference(`${draftPrefix}:new`, '');
         client.setQueryData([wid, 'resource', created.id], created);
       }
-      const response = await post<{ run: Resource; conversation: Resource }>(`${workspacePath(wid)}/chat`, { conversation_id: conversationId, content: text, model_id: model, idempotency_key: intent.key, ...(agent ? { agent_id: agent } : {}) });
+      const existing = readChatIntent(user.id, wid, conversationId);
+      setPendingIntent(existing);
+      if (existing.kind === 'unavailable' || existing.kind === 'corrupt') return;
+      if (existing.kind === 'pending' && (existing.intent.text !== text || existing.intent.modelId !== model || existing.intent.agentId !== agent)) return;
+      const intent = existing.kind === 'pending' ? existing.intent : { key: crypto.randomUUID(), conversationId, text, modelId: model, agentId: agent };
+      if (!saveChatIntent(user.id, wid, intent)) { setPendingIntent({ kind: 'unavailable' }); return; }
+      setPendingIntent({ kind: 'pending', intent });
+      const response = await post<{ run: Resource; conversation: Resource }>(`${workspacePath(wid)}/chat`, { conversation_id: conversationId, content: intent.text, model_id: intent.modelId, idempotency_key: intent.key, ...(intent.agentId ? { agent_id: intent.agentId } : {}) });
       if (viewGeneration.current === generation) {
         // A delayed write receipt is not a fresh permission check. Keep a
         // subsequent read denial until the invalidated query succeeds again.
         client.setQueryData<Resource | null>([wid, 'resource', conversationId], cached => cached === null ? null : response.conversation);
         const remaining = acknowledgeDraft(draftVersion.current, submittedRevision);
         draftVersion.current = { text: remaining, revision: draftVersion.current.revision + 1 };
-        setDraft(remaining); savePreference(`${draftPrefix}:${conversationId}`, remaining); idempotency.current = null; follow.current = true;
+        setDraft(remaining); savePreference(`${draftPrefix}:${conversationId}`, remaining);
+        clearChatIntent(user.id, wid, conversationId, intent.key);
+        setPendingIntent(readChatIntent(user.id, wid, conversationId)); follow.current = true;
       }
       void client.invalidateQueries({ queryKey: [wid] });
     } catch (e) { if (viewGeneration.current === generation) setError(e); } finally { if (viewGeneration.current === generation) setBusy(false); }
@@ -217,11 +234,14 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
       </div>
       {hasNew && <Button className="new-content" onClick={() => { follow.current = true; messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' }); setHasNew(false); }}><ArrowDown size={16} />{t('有新内容', 'New content')}</Button>}
       <div className="composer-wrap"><ErrorNotice error={error || runError || history.error || conversation.error || conversations.error || models.error || agents.error || (chosenModel.unavailable ? null : chosenModel.error) || activeRunQuery.error} draftPreserved onConfigureModels={goModels} onReview={() => { void client.invalidateQueries({ queryKey: [wid] }); }} />{!!eventError && <p className="connection-warning" role="status">{t('连接暂时中断，正在按记录游标恢复。', 'Connection interrupted. Resuming from the saved event cursor.')}</p>}{chosenModel.unavailable && <p className="connection-warning" role="status">{t('上次使用的模型已删除或无权访问，请选择其他模型。', 'The last model was removed or is no longer accessible. Choose another model.')}</p>}
+        {pendingIntent.kind === 'pending' && <div className="notice" role="status"><p>{t('上次发送的结果尚未确认。请先核对会话和运行记录；使用原文、原模型及原代理手动继续，不会创建新的发送意图。', 'The previous send is unconfirmed. Review the conversation and run records first; continuing with the original text, model, and agent reuses the same intent.')}</p>{pendingMismatch && <p>{t('当前内容、模型或代理与原请求不同。请恢复原设置，或确认开始新意图。', 'The current text, model, or agent differs from the original request. Restore them or confirm a new intent.')}</p>}<p>{t('原模型：', 'Original model: ')}{pendingModel ? value(pendingModel.data, 'name', value(pendingModel.data, 'model')) : t('不可用或未加载', 'Unavailable or not loaded')}{' · '}{t('原代理：', 'Original agent: ')}{pendingIntent.intent.agentId ? pendingAgent ? value(pendingAgent.data, 'name') : t('不可用或未加载', 'Unavailable or not loaded') : t('默认助手', 'Default assistant')}</p><details><summary>{t('查看原请求内容', 'View original request text')}</summary><pre className="break-anywhere">{pendingIntent.intent.text}</pre></details><Button type="button" disabled={busy || !!activeRun} onClick={() => setDiscardIntent(true)}>{t('开始新的发送意图', 'Start a new send intent')}</Button></div>}
+        {(pendingIntent.kind === 'unavailable' || pendingIntent.kind === 'corrupt') && <div className="notice error" role="alert"><p>{pendingIntent.kind === 'unavailable' ? t('浏览器无法保存发送记录，暂时无法安全发送。请允许此站点使用本地存储后重试，并先核对会话记录。', 'The browser cannot save the send record, so sending is paused. Allow local storage for this site and review the conversation before retrying.') : t('待确认发送记录无法读取。请先核对会话和运行记录，再决定是否开始新的发送意图。', 'The pending send record cannot be read. Review the conversation and run records before starting a new intent.')}</p>{pendingIntent.kind === 'corrupt' && <Button type="button" disabled={busy || !!activeRun} onClick={() => setDiscardIntent(true)}>{t('开始新的发送意图', 'Start a new send intent')}</Button>}{pendingIntent.kind === 'unavailable' && <Button type="button" onClick={() => setPendingIntent(selected ? readChatIntent(user.id, wid, selected) : { kind: 'none' })}>{t('重试存储', 'Retry storage')}</Button>}</div>}
         {sharedConversation && <p className="connection-warning">{t('共享会话仅可使用工作区共享的代理。', 'Shared conversations can use workspace-shared agents only.')}</p>}
         {!models.isPending && !models.data?.length && <div className="model-needed"><CpuIcon /><span>{t('接入一个模型，就可以开始对话。', 'Connect a model to start a conversation.')}</span><Button variant="text" onClick={goModels}>{t('配置模型', 'Connect model')}</Button></div>}
-        <form className="composer" onSubmit={send}><textarea id="composer-input" aria-label={t('消息', 'Message')} placeholder={!writable ? t('你只能查看这段对话', 'You can view this conversation only') : t('说说你的想法…', 'What’s on your mind?')} value={draft} onChange={e => updateDraft(e.target.value)} rows={3} maxLength={100000} disabled={!writable} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !composing.current && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} /><div className="composer-toolbar"><div className="composer-selects"><label><span className="sr-only">{t('选择模型', 'Select model')}</span><select value={model} onChange={e => { modelRestoredFor.current = selected; setModel(e.target.value); }} disabled={!!activeRun}><option value="">{t('选择模型', 'Select model')}</option>{modelOptions.map(m => <option value={m.id} key={m.id}>{value(m.data, 'name', value(m.data, 'model'))}</option>)}</select></label>{!!agents.data?.length && <label><span className="sr-only">{t('选择代理', 'Select agent')}</span><select value={agent} onChange={e => selectAgent(e.target.value)} disabled={!!activeRun}><option value="">{t('默认助手', 'Default assistant')}</option>{availableAgents.map(a => <option key={a.id} value={a.id}>{value(a.data, 'name')}</option>)}</select></label>}</div>{activeRun ? <Button type="button" variant="stop" onClick={cancel}><Square size={15} fill="currentColor" />{t('停止', 'Stop')}</Button> : <Button type="submit" variant="primary send" aria-label={t('发送消息', 'Send message')} disabled={!draft.trim() || !modelAvailable || !writable} busy={busy}><ArrowUp size={20} /></Button>}</div></form><div className="selector-pagination"><LoadMore query={models} label={t('加载更多模型', 'Load more models')} /><LoadMore query={agents} label={t('加载更多代理', 'Load more agents')} /></div><p className="composer-foot">{t('Enter 发送 · Shift + Enter 换行。模型回复可能有误，请核对重要信息。', 'Enter to send · Shift + Enter for a new line. Check important information.')}</p>
+        <form className="composer" onSubmit={send}><textarea id="composer-input" aria-label={t('消息', 'Message')} placeholder={!writable ? t('你只能查看这段对话', 'You can view this conversation only') : t('说说你的想法…', 'What’s on your mind?')} value={draft} onChange={e => updateDraft(e.target.value)} rows={3} maxLength={100000} disabled={!writable} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !composing.current && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} /><div className="composer-toolbar"><div className="composer-selects"><label><span className="sr-only">{t('选择模型', 'Select model')}</span><select value={model} onChange={e => { modelRestoredFor.current = selected; setModel(e.target.value); }} disabled={!!activeRun}><option value="">{t('选择模型', 'Select model')}</option>{modelOptions.map(m => <option value={m.id} key={m.id}>{value(m.data, 'name', value(m.data, 'model'))}</option>)}</select></label>{!!agents.data?.length && <label><span className="sr-only">{t('选择代理', 'Select agent')}</span><select value={agent} onChange={e => selectAgent(e.target.value)} disabled={!!activeRun}><option value="">{t('默认助手', 'Default assistant')}</option>{availableAgents.map(a => <option key={a.id} value={a.id}>{value(a.data, 'name')}</option>)}</select></label>}</div>{activeRun ? <Button type="button" variant="stop" onClick={cancel}><Square size={15} fill="currentColor" />{t('停止', 'Stop')}</Button> : <Button type="submit" variant="primary send" aria-label={t('发送消息', 'Send message')} disabled={!draft.trim() || !modelAvailable || !writable || pendingMismatch || pendingIntent.kind === 'unavailable' || pendingIntent.kind === 'corrupt'} busy={busy}><ArrowUp size={20} /></Button>}</div></form><div className="selector-pagination"><LoadMore query={models} label={t('加载更多模型', 'Load more models')} /><LoadMore query={agents} label={t('加载更多代理', 'Load more agents')} /></div><p className="composer-foot">{t('Enter 发送 · Shift + Enter 换行。模型回复可能有误，请核对重要信息。', 'Enter to send · Shift + Enter for a new line. Check important information.')}</p>
       </div>
     </div>
+    {discardIntent && selected && <Modal title={t('开始新的发送意图？', 'Start a new send intent?')} close={() => setDiscardIntent(false)}><p>{t('上一次请求可能已经送达，也可能产生费用。请先核对会话和运行记录；开始新意图可能再次调用模型。', 'The previous request may already have arrived and incurred charges. Review the conversation and run records first; a new intent may call the model again.')}</p><div className="dialog-actions"><Button onClick={() => setDiscardIntent(false)}>{t('返回核对', 'Return to review')}</Button><Button variant="primary" onClick={() => { if (clearChatIntent(user.id, wid, selected)) { setPendingIntent({ kind: 'none' }); setDiscardIntent(false); } else setPendingIntent({ kind: 'unavailable' }); }}>{t('确认开始新意图', 'Confirm new intent')}</Button></div></Modal>}
     {settings && <Modal title={t('新对话设置', 'New conversation settings')} close={() => setSettings(false)}><div className="stack"><Field label={t('会话名称', 'Conversation title')}><input value={title} onChange={e => setTitle(e.target.value)} /></Field><Field label={t('对助手的说明', 'Instructions for the assistant')}><textarea rows={5} value={system} onChange={e => setSystem(e.target.value)} /></Field><Field label={t('可见范围', 'Visibility')}><select value={visibility} onChange={e => setVisibility(e.target.value)}><option value="private">{t('仅自己', 'Only me')}</option><option value="workspace">{t('工作区成员', 'Workspace members')}</option></select></Field><Button variant="primary" onClick={() => setSettings(false)}>{t('完成', 'Done')}</Button></div></Modal>}
     {confirm && <Modal title={confirm === 'reset' ? t('重置当前上下文？', 'Reset the current context?') : t('删除此会话？', 'Delete this conversation?')} close={() => setConfirm(null)}><p>{confirm === 'reset' ? t('保留历史记录，后续对话使用新的上下文。当前运行将停止，迟到结果不会写回。', 'History is preserved. Future messages use a new context. The current run will stop and late results cannot write back.') : t('将删除这段会话及其历史。', 'This removes the conversation and its history.')}</p><ErrorNotice error={error} /><div className="dialog-actions"><Button onClick={() => setConfirm(null)}>{t('取消', 'Cancel')}</Button><Button variant={confirm === 'delete' ? 'danger' : 'primary'} busy={busy} onClick={alterConversation}>{t('确认', 'Confirm')}</Button></div></Modal>}
     {branch && <Modal title={t('编辑并建立分支', 'Edit and create a branch')} close={() => setBranch(null)}><form className="stack" onSubmit={createBranch}><p className="muted">{t('原会话保留不变，编辑后的内容进入新的会话分支。', 'The original conversation stays intact. Your edit starts a new branch.')}</p><Field label={t('消息', 'Message')}><textarea rows={7} value={branchText} onChange={e => setBranchText(e.target.value)} required /></Field><ErrorNotice error={error} /><Button variant="primary" busy={busy} type="submit">{t('建立分支', 'Create branch')}</Button></form></Modal>}
