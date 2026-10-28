@@ -397,7 +397,7 @@ try {
     await nav('Knowledge');
     await page.getByRole('button', { name: 'Add', exact: true }).first().click();
     await page.getByLabel('Document title').fill('Browser source document');
-    await page.getByLabel('Source text').fill('Source sentinel: copper finches. <img src=x onerror=alert(1)> stays text.');
+    await page.getByLabel('Source text').fill(`北区🙂 ${'x'.repeat(2300)}\nSource sentinel: copper finches. <img src=x onerror=alert(1)> stays text.`);
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.getByRole('button', { name: 'Browser source document', exact: true }).click();
     await page.getByRole('dialog').getByText('Source sentinel: copper finches.', { exact: false }).waitFor();
@@ -408,7 +408,7 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
   });
 
-  await check('deleted knowledge does not return copied source in run or conversation citations', async () => {
+  await check('retrieved source is verifiable and changes or deletion make old citations unavailable', async () => {
     const document = (await api('GET', `${wp()}/resources/knowledge`)).items.find(item => item.data.title === 'Browser source document');
     assert.ok(document);
     await nav('Conversations');
@@ -418,11 +418,68 @@ try {
     const run = await until(async () => (await api('GET', `${wp()}/resources/runs`)).items.find(item => item.data.status === 'completed' && item.data.citations?.some(citation => citation.document_id === document.id)), 'knowledge chat');
     const conversation = (await api('GET', `${wp()}/resources/conversations`)).items.find(item => item.data.title === 'copper finches');
     assert.ok(conversation);
-    assert.equal(run.data.citations.find(citation => citation.document_id === document.id).source_hash, document.data.source_hash);
+    const reference = run.data.citations.find(citation => citation.document_id === document.id);
+    assert.equal(reference.source_hash, document.data.source_hash);
+    const answer = page.locator('.message.assistant').filter({ hasText: 'Received: copper finches' }).last();
+    await answer.getByText('Retrieved sources (not necessarily used in the answer)').waitFor();
+    await page.setViewportSize({ width: 320, height: 900 });
+    await answer.getByRole('button', { name: 'Source 1: Browser source document', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Check source' });
+    await dialog.getByRole('heading', { name: 'Browser source document' }).waitFor();
+    const expected = new TextDecoder().decode(new TextEncoder().encode(document.data.text).slice(reference.source_start, reference.source_end));
+    assert.equal(await dialog.locator('mark').innerText(), expected, 'Highlight must follow the UTF-8 byte offsets');
+    assert.equal(await dialog.locator('img').count(), 0, 'Source markup must remain inert text');
+    await assertNoOverflow();
+    await screenshot('knowledge-source-320');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const sourceRoute = `**/api/v1/workspaces/*/resource/${document.id}`;
+    await page.route(sourceRoute, route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"unavailable"}' }));
+    await dialog.getByText('Could not check the source. Check your connection and try again.').waitFor({ timeout: 12000 });
+    assert.equal(await dialog.locator('mark').count(), 0, 'A failed refresh cannot show cached source text');
+    await page.unroute(sourceRoute);
+    await dialog.getByRole('button', { name: 'Retry', exact: true }).click();
+    await dialog.getByRole('heading', { name: 'Browser source document' }).waitFor();
+    await page.route(sourceRoute, route => route.fulfill({ status: 403, contentType: 'application/json', body: '{"error":"forbidden"}' }));
+    await dialog.getByText('The source changed, was disabled or deleted, or is no longer accessible.', { exact: false }).waitFor({ timeout: 12000 });
+    assert.equal(await dialog.locator('mark').count(), 0, 'Denied access cannot retain cached source text');
+    await page.unroute(sourceRoute);
+    await dialog.getByRole('button', { name: 'Check again', exact: true }).click();
+    await dialog.getByRole('heading', { name: 'Browser source document' }).waitFor();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
+    let received, release;
+    const responseReady = new Promise(resolve => { received = resolve; });
+    const responseReleased = new Promise(resolve => { release = resolve; });
+    await page.route(sourceRoute, async route => {
+      const response = await route.fetch();
+      received(); await responseReleased;
+      try { await route.fulfill({ response }); } catch { /* Closing the dialog aborts the read. */ }
+    });
+    try {
+      await answer.getByRole('button', { name: 'Source 1: Browser source document', exact: true }).click();
+      await Promise.race([responseReady, wait(12000).then(() => { throw new Error('Source response was not intercepted'); })]);
+      await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+      await page.getByRole('button', { name: 'New conversation', exact: true }).click();
+      release();
+      await page.unroute(sourceRoute);
+      assert.equal(await page.getByRole('dialog', { name: 'Check source' }).count(), 0, 'A late source response cannot reopen a closed dialog');
+      await page.getByRole('button', { name: 'copper finches', exact: true }).click();
+      await page.getByRole('button', { name: 'Source 1: Browser source document', exact: true }).click();
+      await dialog.getByRole('heading', { name: 'Browser source document' }).waitFor();
+    } finally { release(); await page.unroute(sourceRoute); }
+    await api('PATCH', `${wp()}/resource/${document.id}`, { version: document.version, data: { title: document.data.title, text: 'Changed source with copper finches and a different generation.' } });
+    await dialog.getByText('The source changed, was disabled or deleted, or is no longer accessible.', { exact: false }).waitFor({ timeout: 12000 });
+    assert.equal(await dialog.locator('mark').count(), 0, 'Changed text must not be presented as the old passage');
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
     await nav('Knowledge');
     await page.getByRole('button', { name: 'Delete Browser source document', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
     await until(async () => !(await api('GET', `${wp()}/resources/knowledge`)).items.some(item => item.id === document.id), 'source deletion');
+    await nav('Conversations');
+    await page.getByRole('button', { name: 'copper finches', exact: true }).click();
+    await page.getByRole('button', { name: 'Source 1: Browser source document', exact: true }).click();
+    await page.getByRole('dialog').getByText('The source changed, was disabled or deleted, or is no longer accessible.', { exact: false }).waitFor();
+    assert.equal(await page.getByRole('dialog').locator('mark').count(), 0);
+    await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
     const [savedRun, messages, results] = await Promise.all([
       api('GET', `${wp()}/resource/${run.id}`),
       api('GET', `${wp()}/conversations/${conversation.id}/messages`),
@@ -434,13 +491,47 @@ try {
     assert.ok(!JSON.stringify({ savedRun, messages }).includes('Source sentinel: copper finches.'));
   });
 
+  await check('shared conversation reveals only an authorized member source and handles its deletion', async () => {
+    const shared = await create('knowledge', { title: 'Shared shift manual', text: 'orchid shift: inspect the shared pump.' }, 'workspace');
+    const privateDoc = await create('knowledge', { title: 'Private shift manual', text: 'orchid shift: private secret FINCH-701.' });
+    const model = await create('models', { name: 'Shared source diagnostic', provider: 'diagnostic', model: 'diagnostic' }, 'workspace');
+    const conversation = await create('conversations', { title: 'Shared source check' }, 'workspace');
+    const started = await api('POST', `${wp()}/chat`, { conversation_id: conversation.id, model_id: model.id, content: 'orchid shift', idempotency_key: randomUUID() });
+    const runId = started.run.id;
+    const run = await until(async () => { const item = await api('GET', `${wp()}/resource/${runId}`); return item.data.status === 'completed' && item; }, 'shared source run');
+    assert.ok(run.data.citations.some(item => item.document_id === shared.id));
+    assert.ok(!run.data.citations.some(item => item.document_id === privateDoc.id), 'A shared conversation must not retrieve a private source');
+    const bob = (await api('POST', '/admin/users', { username: 'source_bob', password }, [200, 201])).user;
+    await api('POST', `${wp()}/members`, { user_id: bob.id, role: 'member' }, [200, 201]);
+    const bobContext = await browser.newContext({ viewport: { width: 320, height: 900 }, locale: 'en-US', timezoneId: 'Asia/Taipei' });
+    try {
+      const bobPage = await bobContext.newPage();
+      await bobPage.goto(base);
+      await bobPage.getByLabel('Username or verified email', { exact: true }).fill('source_bob');
+      await bobPage.getByLabel('Password', { exact: false }).fill(password);
+      await bobPage.getByRole('button', { name: 'Sign in', exact: true }).click();
+      await bobPage.getByRole('button', { name: 'Show conversations', exact: true }).click();
+      await bobPage.getByRole('button', { name: 'Shared source check', exact: true }).click();
+      const denied = await bobContext.request.get(`${base}/api/v1${wp()}/resource/${privateDoc.id}`);
+      assert.ok([403, 404].includes(denied.status()), `Private source returned ${denied.status()}`);
+      const sourceButton = bobPage.getByRole('button', { name: 'Source 1: Shared shift manual', exact: true });
+      await sourceButton.click();
+      const dialog = bobPage.getByRole('dialog', { name: 'Check source' });
+      await dialog.getByRole('heading', { name: 'Shared shift manual' }).waitFor();
+      assert.ok((await dialog.locator('mark').innerText()).includes('inspect the shared pump'));
+      await api('DELETE', `${wp()}/resource/${shared.id}?version=${shared.version}`, undefined, [204]);
+      await dialog.getByText('The source changed, was disabled or deleted, or is no longer accessible.', { exact: false }).waitFor({ timeout: 12000 });
+      assert.equal(await dialog.locator('mark').count(), 0);
+    } finally { await bobContext.close(); }
+  });
+
   await check('visible pagination reaches conversations beyond 200 resources', async () => {
     await create('conversations', { title: 'Pagination ancient sentinel' });
     await wait(1100);
     for (let index = 0; index < 205; index++) await create('conversations', { title: `Pagination fixture ${String(index).padStart(3, '0')}` });
     await nav('Conversations');
     await page.getByLabel('Search loaded conversation titles').fill('Pagination ancient sentinel');
-    assert.equal(await page.getByRole('button', { name: 'Pagination ancient sentinel', exact: true }).count(), 0);
+    await until(async () => (await page.getByRole('button', { name: 'Pagination ancient sentinel', exact: true }).count()) === 0, 'fresh first page excludes the older conversation');
     for (let step = 0; step < 3 && !await page.getByRole('button', { name: 'Pagination ancient sentinel', exact: true }).count(); step++) {
       try { await page.getByRole('button', { name: 'Load older conversations', exact: true }).click(); }
       catch (error) { if (!await page.getByRole('button', { name: 'Pagination ancient sentinel', exact: true }).isVisible()) throw error; }

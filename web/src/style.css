@@ -734,3 +734,9 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
   .build-prompt-actions { justify-content: flex-start; }
   .build-prompt-textarea { min-height: 320px; padding: 11px; font-size: 11px; }
 }
+
+.message-sources { margin-top: 12px; }
+.message-sources p { margin: 0 0 4px; }
+.source-buttons { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.source-buttons .button { max-width: 100%; font-size: 12px; min-height: 36px; padding: 6px 9px; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.source-document mark { background: var(--accent); color: var(--accent-text); border-radius: 3px; }

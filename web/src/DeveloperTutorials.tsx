@@ -76,6 +76,7 @@ export default function DeveloperTutorials({ user }: { user: User }) {
       </div>
       <div className="developer-caution"><ShieldCheck size={17} aria-hidden="true" /><p>{t('模型“测试”会发起真实请求，可能产生费用。当前渠道没有无副作用的连通性测试；不要把“测试成功”按钮做成摆设。', 'Model “test” sends a real request and may incur a charge. Channels have no side-effect-free connectivity test today; do not add a pretend test button.')}</p></div>
       <div className="developer-caution"><ShieldCheck size={17} aria-hidden="true" /><p>{t('发送结果未确认时先核对会话和运行记录。刷新后可用原正文、模型和代理继续同一意图；换内容或配置要明确开始新意图。浏览器禁止本地存储或不支持同源标签页协调时会暂停发送；请使用 HTTPS 或本机地址。', 'When a send is unconfirmed, review the conversation and run records first. After refresh, continue the same intent with the original text, model and agent; changing them requires confirming a new intent. Sending pauses if browser storage or same-origin tab coordination is unavailable; use HTTPS or a local address.')}</p></div>
+      <div className="developer-caution"><BookOpen size={17} aria-hidden="true" /><p>{t('回答列出的资料只是检索候选。打开时会重新检查权限、内容版本和原文位置；删除文档不会自动清除模型已经生成的回答或旧备份。', 'Sources listed under an answer are retrieval candidates. Opening one checks current access, content version and source position. Deleting a document does not erase generated answers or old backups.')}</p></div>
       <SourceLink path="recipes/rstrbot-core/HTTP_CONTRACT.md">{t('查看完整 HTTP 契约', 'Read the full HTTP contract')}</SourceLink>
     </section>
 
