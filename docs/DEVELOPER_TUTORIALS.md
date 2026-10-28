@@ -101,3 +101,5 @@ mise exec -- ./scripts/check.sh
 回答里的“检索到的资料”是候选，不代表模型确实使用了它。打开时前端重新读取当前获准的原文，并核对摘要、索引版本、分块及 UTF-8 字节范围；不一致时不能显示旧引用对应的新文本。参照 RSTRBOT-29 测试来源修改、停用、删除、权限、断线及迟到响应。
 
 运行 `python3 tests/knowledge_lifecycle.py` 可使用隔离 SQLite 和本地合成模型，核对文档改版、删除和重启后的实际模型输入。这个检查不覆盖外部索引、多连接 WAL、商业模型或所有竞态；索引视图与代次测试见 RSTRBOT-31。
+
+For scheduled work, inspect the latest run result separately from the next scheduled occurrence. An interrupted claim requires reviewing its run and destination before any new intention; restart does not automatically replay it. Exercise the local crash and request-ledger scenario with `python3 tests/schedule_outcomes.py` after building the core.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -203,6 +203,41 @@ try {
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.getByRole('button', { name: 'Diagnostic browser tools', exact: true }).waitFor();
     assert.equal((await api('GET', `${wp()}/resources/plugins`)).items.find(plugin => plugin.data.name === 'Diagnostic browser tools').data.enabled, true);
+  });
+
+  await check('failed scheduled execution shows its actual result and opens the authorized run', async () => {
+    const conversation = await create('conversations', { title: 'Schedule outcome fixture' });
+    const document = await create('knowledge', { title: 'Schedule damaged index', text: 'schedule-outcome fixture' });
+    try {
+      const injected = spawnSync('python3', ['-c', "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"UPDATE resources SET data=json_set(data, '$.chunks[0].text', 'stale chunk') WHERE id=?\", (sys.argv[2],)); c.commit()", path.join(directory, 'rstrbot.db'), document.id]);
+      assert.equal(injected.status, 0, injected.stderr.toString());
+      const schedule = await create('schedules', { title: 'Failed schedule fixture', prompt: 'schedule-outcome fixture', model_id: firstModel.id, conversation_id: conversation.id, schedule_type: 'once', at: Math.floor(Date.now()/1000) + 4, enabled: true });
+      const result = await until(async () => { const current = await api('GET', `${wp()}/resource/${schedule.id}`); return current.data.last_result?.status === 'failed' && current; }, 'scheduled failure');
+      assert.equal(result.data.status, 'failed');
+      await nav('Schedules');
+      const row = page.locator('.resource-row').filter({ hasText: 'Failed schedule fixture' });
+      await row.getByText('Last run:').waitFor();
+      assert.equal(await row.locator('.status').filter({ hasText: 'Failed' }).count(), 2);
+      await row.getByRole('button', { name: 'Failed schedule fixture', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'View related run' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Run details' });
+      await dialog.getByText(result.data.run_id, { exact: true }).waitFor();
+      await dialog.getByText('Failed', { exact: true }).waitFor();
+      await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
+      // UI fixture for an already uncertain claim; the crash/restart behavior
+      // itself is exercised separately by schedule_outcomes.py.
+      const pending = spawnSync('python3', ['-c', "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"UPDATE resources SET data=json_set(data, '$.status', 'needs_reconciliation', '$.enabled', json('false')) WHERE id=?\", (sys.argv[2],)); c.commit()", path.join(directory, 'rstrbot.db'), schedule.id]);
+      assert.equal(pending.status, 0, pending.stderr.toString());
+      await nav('Schedules');
+      await row.getByText('Needs review', { exact: true }).waitFor();
+      await row.getByRole('button', { name: 'Failed schedule fixture', exact: true }).click();
+      await page.getByRole('dialog').getByText('The previous outcome needs review and will not be retried automatically. Check the run and destination first.').waitFor();
+      await page.getByRole('dialog').getByRole('button', { name: 'View related run' }).click();
+      await page.getByRole('dialog', { name: 'Run details' }).getByText(result.data.run_id, { exact: true }).waitFor();
+      await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
+    } finally {
+      await api('DELETE', `${wp()}/resource/${document.id}?version=${document.version}`, undefined, [204]);
+    }
   });
 
   await check('chat completes a real model-tool-model loop and shows the tool result', async () => {

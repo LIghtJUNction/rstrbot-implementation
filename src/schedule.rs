@@ -451,7 +451,11 @@ async fn refresh_running(store: &Store, schedule: &Resource) -> Result<(), AppEr
         data["status"] = if data["enabled"] == true {
             "scheduled"
         } else if next.is_none() {
-            "completed"
+            match status {
+                "failed" => "failed",
+                "cancelled" => "cancelled",
+                _ => "completed",
+            }
         } else {
             "paused"
         }
