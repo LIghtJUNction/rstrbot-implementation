@@ -25,6 +25,48 @@ fn context() -> InstanceContext {
 }
 
 #[tokio::test]
+async fn provider_rejections_remain_classified_and_do_not_expose_response_bodies() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for (status, expected) in [
+        (401, "provider_authentication_failed"),
+        (403, "provider_access_denied"),
+        (429, "provider_rate_limited"),
+        (500, "plugin_error"),
+    ] {
+        for method in ["model.list", "model.generate", "model.test"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 65536];
+                let count = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                assert!(request.starts_with(if method == "model.list" {
+                    "GET /v1/models"
+                } else {
+                    "POST /v1/chat/completions"
+                }));
+                let body = "FIXTURE-SECRET-NEVER-SHOW";
+                let response = format!(
+                    "HTTP/1.1 {status} Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let host = PluginHost::new(dir.path().into());
+            let mut provider = manifest();
+            provider.executable = env!("CARGO_BIN_EXE_rstrbot-openai").into();
+            provider.capabilities = vec!["model".into()];
+            let error = host.call(&provider, &context(), method, json!({"base_url":format!("http://{address}/v1"),"allow_private_network":true,"model":"fixture-upstream","messages":[{"role":"user","content":"test"}],"stream":true}), CancellationToken::new(), None).await.unwrap_err();
+            assert_eq!(error.code(), expected, "{method} HTTP {status}");
+            assert!(!error.to_string().contains("FIXTURE-SECRET-NEVER-SHOW"));
+            server.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn authority_is_rechecked_after_handshake_before_business_rpc() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let directory = tempfile::Builder::new()

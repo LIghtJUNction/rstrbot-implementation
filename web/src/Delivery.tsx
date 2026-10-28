@@ -1,61 +1,87 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Send } from 'lucide-react';
-import { formatTime, post, value } from './api';
+import { api, formatTime, post, value } from './api';
 import type { Resource } from './api';
-import { useResources, workspacePath } from './data';
+import { resourcePath, useResources, workspacePath } from './data';
 import { Button, ErrorNotice, Field, Loading, LoadMore, Modal, Status, useText } from './ui';
 
-type Intent = { key: string; text: string; started: boolean; receipt?: Resource };
+type Intent = { key: string; text: string; started: boolean; routeVersion: number; receiptId?: string };
 
 export function SendDialog({ workspace, user, route, close, saved }: {
   workspace: string; user: string; route: Resource; close: () => void; saved: () => void;
 }) {
   const { t } = useText();
   const storageKey = `rstrbot:delivery:${user}:${workspace}:${route.id}`;
-  const fresh = (): Intent => ({ key: crypto.randomUUID(), text: '', started: false });
+  const historyKey = `${storageKey}:history`;
+  const fresh = (): Intent => ({ key: crypto.randomUUID(), text: '', started: false, routeVersion: route.version });
   const [intent, setIntent] = useState<Intent>(() => {
     try {
-      const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') as Intent | null;
-      if (stored && typeof stored.key === 'string' && typeof stored.text === 'string') return stored;
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') as Partial<Intent> | null;
+      if (stored && typeof stored.key === 'string' && typeof stored.text === 'string' && typeof stored.started === 'boolean') return { key: stored.key, text: stored.text, started: stored.started, routeVersion: Number.isSafeInteger(stored.routeVersion) ? stored.routeVersion! : 0, ...(typeof stored.receiptId === 'string' ? { receiptId: stored.receiptId } : {}) };
     } catch { /* The request key remains stable in this dialog when storage is unavailable. */ }
     return fresh();
   });
+  const [receipt, setReceipt] = useState<Resource | null>(null); const [receiptLoading, setReceiptLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [externalChecked, setExternalChecked] = useState(false);
   const remember = (next: Intent) => {
     setIntent(next);
     try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* Optional recovery aid. */ }
   };
+  useEffect(() => {
+    if (!intent.receiptId) { setReceipt(null); return; }
+    const controller = new AbortController(); setReceiptLoading(true); setError(null);
+    void api<Resource>(resourcePath(workspace, intent.receiptId), { signal: controller.signal }).then(current => {
+      if (!controller.signal.aborted) setReceipt(current);
+    }).catch(cause => { if (!controller.signal.aborted) { setReceipt(null); setError(cause); } }).finally(() => { if (!controller.signal.aborted) setReceiptLoading(false); });
+    return () => controller.abort();
+  }, [workspace, intent.receiptId]);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setError(null);
-    const next = { ...intent, started: true }; remember(next);
     try {
-      const receipt = await post<Resource>(`${workspacePath(workspace)}/routes/${encodeURIComponent(route.id)}/send`, {
+      const currentRoute = await api<Resource>(resourcePath(workspace, route.id));
+      if (currentRoute.version !== intent.routeVersion) throw new Error(t('渠道配置已变化。请核对最新地址后，再决定是否创建新投递。', 'The route configuration changed. Review the current destination before deciding whether to create a new delivery.'));
+      if (currentRoute.data.enabled !== true) throw new Error(t('此渠道当前已停用，消息没有提交。', 'This route is disabled; the message was not submitted.'));
+      const next = { ...intent, started: true }; remember(next);
+      const response = await post<Resource>(`${workspacePath(workspace)}/routes/${encodeURIComponent(route.id)}/send`, {
         text: next.text, idempotency_key: next.key,
       });
-      remember({ ...next, receipt }); saved();
-    } catch (err) { setError(err); } finally { setBusy(false); }
+      remember({ ...next, receiptId: response.id }); setReceipt(null); saved();
+    } catch (cause) { setError(cause); } finally { setBusy(false); }
   }
-  function newMessage() { remember(fresh()); setError(null); }
-  const status = intent.receipt ? value(intent.receipt.data, 'status', 'unknown') : '';
-  const needsReview = status && !['accepted', 'rejected', 'not_sent'].includes(status);
-  return <Modal title={t('发送到渠道', 'Send to channel')} close={() => { if (!busy) close(); }}>
+  function newMessage() {
+    if (intent.started && !intent.receiptId) {
+      try { const previous = JSON.parse(sessionStorage.getItem(historyKey) ?? '[]') as Intent[]; sessionStorage.setItem(historyKey, JSON.stringify([...previous.slice(-9), intent])); } catch { /* The user has explicitly confirmed the external check; in-memory recovery remains available. */ }
+    }
+    remember(fresh()); setReceipt(null); setError(null); setExternalChecked(false);
+  }
+  const textBytes = new TextEncoder().encode(intent.text).length;
+  const status = receipt ? value(receipt.data, 'status', 'unknown') : '';
+  const needsReview = ['unknown', 'prepared', 'sending', 'rejected'].includes(status) || (intent.started && !intent.receiptId);
+  const canCreateNew = intent.receiptId ? !!receipt && !needsReview : intent.started && externalChecked;
+  return <Modal title={t('发送到渠道', 'Send to channel')} close={() => { if (!busy) close(); }} closeDisabled={busy}>
     <form className="stack" onSubmit={submit}>
       <p><strong>{value(route.data, 'name', route.id)}</strong></p>
       <p className="muted small">{value(route.data, 'url')}</p>
       <Field label={t('消息内容', 'Message')} hint={t('只发送到此渠道保存的地址。接收端可能记录这条消息。', 'This sends to the saved destination. The receiver may store your message.')}>
-        <textarea value={intent.text} rows={6} maxLength={16000} required disabled={intent.started}
+        <textarea value={intent.text} rows={6} required disabled={intent.started || !!intent.receiptId}
           onChange={e => setIntent({ ...intent, text: e.target.value })} />
       </Field>
+      <p className={`small ${textBytes > 32768 ? 'field-error' : 'muted'}`}>{textBytes.toLocaleString()} / 32,768 {t('UTF-8 字节', 'UTF-8 bytes')}</p>
       <ErrorNotice error={error} />
-      {intent.started && !intent.receipt && !busy && <p className="info-line">{t('响应尚未确认。再次查询将使用同一个请求编号，不会自动发起第二次投递。', 'The response is unconfirmed. Querying again uses the same request ID and does not start a second delivery.')}</p>}
-      {intent.receipt && <div className="stack" role="status"><Status state={status} />
-        <p className="small muted">{t('投递编号：', 'Delivery ID: ')}{intent.receipt.id}</p>
-        <p>{status === 'accepted' ? t('接收端已接受请求。此回执不表示最终收件人已经阅读。', 'The receiver accepted the request. This receipt does not confirm that the final recipient read it.') : needsReview ? t('结果需要核对。请先凭投递编号检查目标端；系统不会自动重发。', 'Reconcile this delivery ID with the destination first. The system will not resend it automatically.') : t('本次未确认成功投递，请检查渠道或接收端。', 'This delivery was not confirmed as successful. Check the channel or receiver.')}</p>
+      {intent.started && !intent.receiptId && !busy && <div className="stack"><p className="info-line">{t('结果尚未确认。继续原请求会沿用相同编号；如果服务器还没收到第一次请求，这次会成为首次发送。', 'The result is unconfirmed. Continuing uses the same request ID; if the server never received the first request, this will send it for the first time.')}</p><p className="small muted">{t('先刷新投递记录并核对目标端。接口不能把读取到的渠道版本原子绑定到后续发送。', 'Refresh the delivery list and check the receiver first. The API cannot atomically bind the route version you read to a later send.')}</p></div>}
+      {intent.receiptId && receiptLoading && <Loading text={t('正在读取投递回执…', 'Reading delivery receipt…')} />}
+      {receipt && <div className="stack" role="status"><Status state={status} />
+        <p className="small muted">{t('投递编号：', 'Delivery ID: ')}{receipt.id}</p>
+        <p>{status === 'accepted' ? t('接收端已接受请求。此回执不表示最终收件人已经阅读。', 'The receiver accepted the request. This receipt does not confirm that the final recipient read it.') : needsReview ? t('结果需要在目标端核对。未知或拒绝回执不代表对方一定没有收到消息。', 'Check the receiver. An unknown or rejected receipt does not prove that the message was not received.') : status === 'not_sent' ? t('服务端确认这次没有发送。修复问题后，可明确创建新的投递。', 'The server confirmed that this attempt was not sent. Fix the issue before explicitly creating a new delivery.') : t('投递未被接收端接受。对方仍可能已产生副作用；核对后再决定下一步。', 'The receiver did not accept the delivery. It may still have caused side effects; check before deciding what to do next.')}</p>
       </div>}
+      {intent.started && needsReview && <label className="check-field"><input type="checkbox" checked={externalChecked} onChange={event => setExternalChecked(event.target.checked)} /><span>{t('我已在目标端核对，仍要创建一条新的投递', 'I checked the receiver and still want to create a new delivery')}</span></label>}
       <div className="dialog-actions"><Button type="button" disabled={busy} onClick={close}>{t('关闭', 'Close')}</Button>
-        {!intent.receipt && <Button type="submit" variant="primary" busy={busy} disabled={!intent.text.trim()}><Send size={16} />{intent.started ? t('查询原投递结果', 'Query original delivery') : t('发送', 'Send')}</Button>}
-        {intent.receipt && <Button type="button" onClick={newMessage}>{needsReview ? t('已核对，创建另一条消息', 'Reconciled; create another message') : t('创建另一条消息', 'Create another message')}</Button>}
+        {intent.started && <Button type="button" disabled={busy} onClick={saved}>{t('刷新我的投递记录', 'Refresh my delivery records')}</Button>}
+        {!intent.receiptId && <Button type="submit" variant="primary" busy={busy} disabled={!intent.text.trim() || textBytes > 32768}><Send size={16} />{intent.started ? t('继续原发送请求', 'Continue original send request') : t('发送消息', 'Send message')}</Button>}
+        {canCreateNew && <Button type="button" onClick={newMessage}>{t('创建另一条消息', 'Create another message')}</Button>}
+        {receipt && <Button type="button" disabled={receiptLoading} onClick={() => { setReceipt(null); setError(null); const id = intent.receiptId; if (id) void api<Resource>(resourcePath(workspace, id)).then(setReceipt).catch(setError); }}>{t('刷新回执', 'Refresh receipt')}</Button>}
       </div>
     </form>
   </Modal>;

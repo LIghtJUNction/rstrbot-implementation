@@ -86,3 +86,13 @@ labels, not real cloud synchronization or a particular password-manager vendor.
 Real Google account login, real hardware, platform-native prompts and delivery
 through an external SMTP provider still require a deployment configured with
 those services.
+
+## Model and channel configuration
+
+Run the focused configuration checks after building the binaries and WebUI:
+
+```sh
+node tests/browser/verify_configuration.mjs --chromium /absolute/path/to/chromium
+```
+
+Run this command from the implementation root. It starts and removes its own system-temp SQLite fixture, prints checks and input hashes to stdout, and creates no checkout output directory. It verifies field labels, inline step errors, keyboard submission, cancellation and stale discovery results, single-flight saving, exact prices, a disabled Webhook at 320px, and the current embedded recipe prompt with preserved browser drafts. Diagnostic discovery uses the actual core/plugin; delayed response cases intercept HTTP. No commercial provider or external delivery is exercised.

@@ -35,7 +35,7 @@ def main():
     if not (web / "index.html").is_file():
         parser.error("Build the WebUI before packaging")
     files.extend((path, "web/" + path.relative_to(web).as_posix()) for path in web.rglob("*") if path.is_file())
-    for name in ("README.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/OPERATIONS.md", "docs/ACCEPTANCE.md", "docs/IMPLEMENTATION_REPORT.md"):
+    for name in ("README.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/OPERATIONS.md", "docs/ACCEPTANCE.md", "docs/IMPLEMENTATION_REPORT.md", "docs/DEVELOPER_TUTORIALS.md", ".agents/skills/rstrbot-development/SKILL.md", ".agents/skills/rstrbot-plugin-development/SKILL.md"):
         path = ROOT / name
         if not path.is_file():
             parser.error(f"Required release document is missing: {name}")

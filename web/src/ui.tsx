@@ -1,7 +1,7 @@
 import { cloneElement, isValidElement, createContext, useContext, useEffect, useId, useRef } from 'react';
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { AriaAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
 import { AlertCircle, ArrowRight, LoaderCircle, X } from 'lucide-react';
-import { friendlyError } from './api';
+import { ApiError, friendlyError, TransportError } from './api';
 
 export type Language = 'zh' | 'en';
 export const LanguageContext = createContext<Language>('zh');
@@ -20,10 +20,20 @@ export function Brand({ small = false }: { small?: boolean }) {
   return <span className={`brand ${small ? 'small' : ''}`}><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 26V6h14l5 7-11 6 11 7h-8L7 18l14-6h-8v14" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinejoin="round" /></svg><span>RstrBot<span className="brand-dot">.</span></span></span>;
 }
 
-export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+export function ErrorNotice({ error, onRetry, draftPreserved, onReview, onConfigureModels }: { error: unknown; onRetry?: () => void; draftPreserved?: boolean; onReview?: () => void; onConfigureModels?: () => void }) {
   const { t } = useText();
   if (!error) return null;
-  return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>{t('未能完成操作', 'The operation could not be completed')}</strong><p>{friendlyError(error)}</p></div>{onRetry && <Button onClick={onRetry}>{t('重试', 'Retry')}</Button>}</div>;
+  if (error instanceof ApiError) {
+    const guidance = new Map([
+      ['provider_authentication_failed', t('模型服务未接受凭据。请检查模型配置中的密钥；如果没有编辑权限，请联系工作区管理员。', 'The model provider rejected the credentials. Check the key in model settings, or contact a workspace administrator if you cannot edit it.')],
+      ['provider_access_denied', t('模型服务拒绝访问。请检查模型和服务商授权；如果没有编辑权限，请联系工作区管理员。', 'The model provider denied access. Check the model and provider permissions, or contact a workspace administrator if you cannot edit them.')],
+      ['provider_rate_limited', t('模型服务请求过于频繁。请稍等，核对运行记录后再手动尝试。', 'The model provider is rate limiting requests. Wait, review the run record, and try again manually.')],
+    ]);
+    const message = guidance.get(error.code);
+    if (message) return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>{t('模型服务拒绝了请求', 'The model provider rejected the request')}</strong><p>{message}</p></div>{onConfigureModels && error.code !== 'provider_rate_limited' && <Button type="button" onClick={onConfigureModels}>{t('查看模型配置', 'View model settings')}</Button>}</div>;
+  }
+  if (error instanceof TransportError) return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>{t('连接中断，结果尚未确认', 'Connection interrupted; result unconfirmed')}</strong><p>{draftPreserved ? t('草稿仍在。请检查网络，并先核对会话与运行记录，再决定是否手动发送。请求可能已送达；恢复连接不会自动重发。', 'Your draft is still here. Check your connection, then review conversation and run records before sending manually. The request may have arrived; reconnecting will not resend it automatically.') : t('请检查网络或服务连接。请求可能已送达；先核对最新记录，再决定是否重试。', 'Check your network or service connection. The request may have arrived; review the latest records before retrying.')}</p><details><summary>{t('技术详情', 'Technical details')}</summary><p>{friendlyError(error)}</p></details></div>{onReview && <Button type="button" onClick={onReview}>{t('核对会话记录', 'Review conversation records')}</Button>}{onRetry && <Button type="button" onClick={onRetry}>{t('重新读取', 'Reload records')}</Button>}</div>;
+  return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>{t('未能完成操作', 'The operation could not be completed')}</strong><p>{friendlyError(error)}</p></div>{onRetry && <Button type="button" onClick={onRetry}>{t('重试', 'Retry')}</Button>}</div>;
 }
 
 export function Loading({ text }: { text?: string }) {
@@ -51,12 +61,12 @@ export function Modal({ title, children, close, wide = false, closeDisabled = fa
   </dialog>;
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string; children: ReactNode }) {
   const generated = useId();
-  const control = isValidElement<{ id?: string; 'aria-describedby'?: string }>(children) ? children : null;
+  const control = isValidElement<{ id?: string } & AriaAttributes>(children) ? children : null;
   const id = control?.props.id ?? generated;
-  const description = [control?.props['aria-describedby'], hint ? `${generated}-hint` : null].filter(Boolean).join(' ') || undefined;
-  return <div className="field"><label htmlFor={id}>{label}</label>{control ? cloneElement(control, { id, 'aria-describedby': description }) : children}{hint && <small id={`${generated}-hint`}>{hint}</small>}</div>;
+  const description = [control?.props['aria-describedby'], hint ? `${generated}-hint` : null, error ? `${generated}-error` : null].filter(Boolean).join(' ') || undefined;
+  return <div className="field"><label htmlFor={id}>{label}</label>{control ? cloneElement(control, { id, 'aria-describedby': description, 'aria-invalid': error ? true : control.props['aria-invalid'] }) : children}{hint && <small id={`${generated}-hint`}>{hint}</small>}{error && <small className="field-error" id={`${generated}-error`} role="alert">{error}</small>}</div>;
 }
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow?: string; title: string; description?: string; action?: ReactNode }) {

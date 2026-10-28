@@ -11,7 +11,7 @@ if [[ "${1:-}" == "--full-matrix" ]]; then
   : "${RSTRBOT_TEST_VALKEY_SERVER:?Set the Valkey server executable path}"
   : "${RSTRBOT_TEST_VALKEY_CLI:?Set the Valkey CLI executable path}"
 fi
-command -v dotnet >/dev/null || { printf '.NET 8 SDK is required for four-language protocol verification.\n' >&2; exit 2; }
+command -v dotnet >/dev/null || { printf '.NET 10 SDK (10.0.403) is required for four-language protocol verification.\n' >&2; exit 2; }
 mkdir -p test-results
 python3 scripts/generate_openapi.py --check
 python3 scripts/validate_openapi.py

@@ -1,3 +1,5 @@
+import { notifySessionChange } from './sessionChange.ts';
+
 export type Json = Record<string, unknown>;
 export type User = { id: string; username: string; is_admin?: boolean; instance_admin?: boolean };
 export type Workspace = { id: string; name: string; role: string };
@@ -15,6 +17,10 @@ export class ApiError extends Error {
   constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; }
 }
 
+export class TransportError extends Error {
+  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }); this.name = 'TransportError'; }
+}
+
 // A network failure may leave a readable cached view. An explicit access or
 // existence failure must not keep showing a resource that the server denied.
 export function isResourceUnavailable(error: unknown): boolean {
@@ -22,10 +28,15 @@ export function isResourceUnavailable(error: unknown): boolean {
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
+  let response: Response;
+  try { response = await fetch(`/api/v1${path}`, {
     ...options, credentials: 'same-origin',
     headers: { Accept: 'application/json', ...(options.method && options.method !== 'GET' ? { 'X-RstrBot-Request': '1' } : {}), ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
-  });
+  }); } catch (cause) {
+    if (options.signal?.aborted) throw cause;
+    throw new TransportError(cause);
+  }
+  if (response.ok && options.method === 'POST' && ['/auth/login', '/auth/passkeys/login/finish', '/auth/logout', '/setup'].includes(path) && typeof window !== 'undefined') notifySessionChange();
   if (response.status === 204) return undefined as T;
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {

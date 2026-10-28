@@ -69,7 +69,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12.16"
+          python-version: "3.15.2"
       - name: Select storage and optional cache
         shell: bash
         run: |
@@ -144,10 +144,10 @@ jobs:
           node-version: "24.22.1"
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12.16"
+          python-version: "3.15.2"
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: "10.0.403"
       - run: cargo build -p rstrbot-plugin --bins --locked
       - run: npm ci && npm run build
         working-directory: sdk/typescript

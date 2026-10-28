@@ -23,8 +23,13 @@
     },
     {
       "path": "BUILD_PROMPT.md",
-      "bytes": 22399,
-      "sha256": "a379110284c02d5abf151a2313ecd961ad5ea8415b92e898f03cf4ac14b24f11"
+      "bytes": 31927,
+      "sha256": "07dc24680e235e75778219c2bfa2d5d7c0d0d60e1e752a6b9d8f6d8a832ddfe1"
+    },
+    {
+      "path": "history/BUILD_PROMPT-v1.3.md",
+      "bytes": 28364,
+      "sha256": "811748279762aaf9afefab2458f4b89c157dac794774d11c87bb5068dd82e000"
     },
     {
       "path": "ENGINEERING_GOALS.md",
@@ -101,5 +106,6 @@
       "bytes": 30164,
       "sha256": "6f2acfa235bde2755cba3091b8523305395c4f98a8a147091fe1a69294ea9626"
     }
-  ]
+  ],
+  "build_prompt_version": "1.4"
 }

@@ -4023,6 +4023,119 @@
         ]
       }
     },
+    "/api/v1/workspaces/{wid}/models/discover": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "post": {
+        "operationId": "discover_models",
+        "summary": "Discover model IDs from an installed provider",
+        "description": "Workspace admin required. Invokes only the installed provider's model.list capability; it sends no generation request and reserves no RstrBot budget, though the provider may log or charge the request. Temporary api_key values are write-only and never persisted. A saved key may be reused only for the exact same workspace resource, provider, base URL and private-network grant. HTTPS is required by default; private HTTP requires the current instance administrator and global policy. Session, role, recovery and saved-model version are rechecked before dispatch, during the call and before returning. Results contain at most 500 validated, deduplicated IDs/names. Discovery failure does not prevent manual model ID entry.",
+        "tags": [
+          "Execution"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDiscoveryResult"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "example-model",
+                      "name": "Example model"
+                    }
+                  ],
+                  "truncated": false,
+                  "fixture": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error502"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          },
+          "default": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        },
+        "x-handler": "src/api.rs::discover_models",
+        "x-csrf": "Required even for public setup/login unless Authorization starts with Bearer; cross-site/origin checks also apply to bearer requests.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "UTF-8 JSON, maximum total body 1 MiB. Byte-length limits are annotated separately from JSON Schema character counts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelDiscoveryInput"
+              },
+              "examples": {
+                "openai_compatible": {
+                  "summary": "Illustrative, no real credentials or IDs",
+                  "value": {
+                    "provider": "openai",
+                    "base_url": "https://api.example.com/v1",
+                    "allow_private_network": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{wid}/plugins/{id}/reload": {
       "parameters": [
         {
@@ -6875,6 +6988,110 @@
         "required": [
           "name",
           "model"
+        ]
+      },
+      "ModelDiscoveryInput": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "maxLength": 100,
+            "x-max-utf8-bytes": 100,
+            "description": "ID of an installed package declaring model capability.",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "base_url": {
+            "type": "string",
+            "maxLength": 2048,
+            "x-max-utf8-bytes": 2048,
+            "description": "Required for network providers; HTTP requires an approved private-network grant."
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "x-max-utf8-bytes": 8192,
+                "description": "Temporary write-only credential used for this discovery call and never persisted.",
+                "writeOnly": true,
+                "format": "password",
+                "x-sensitive": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allow_private_network": {
+            "type": "boolean",
+            "default": false
+          },
+          "saved_model_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "Opaque resource/account/workspace identifier; do not infer authorization from its shape."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "description": "Supply at most one of api_key or saved_model_id. A saved key is reused only when the saved model's workspace, provider, exact base URL and private-network grant match. Unknown fields are rejected.",
+        "required": [
+          "provider"
+        ]
+      },
+      "DiscoveredModel": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "x-max-utf8-bytes": 200,
+            "description": "At most 200 UTF-8 bytes.",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "x-max-utf8-bytes": 200,
+            "description": "At most 200 UTF-8 bytes."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "ModelDiscoveryResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredModel"
+            },
+            "maxItems": 500
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "fixture": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Only sanitized model IDs and display names are returned; provider-specific fields are discarded.",
+        "required": [
+          "items",
+          "truncated",
+          "fixture"
         ]
       },
       "PluginInput": {

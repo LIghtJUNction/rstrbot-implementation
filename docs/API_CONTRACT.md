@@ -1,6 +1,6 @@
 # RstrBot HTTP contract — application 0.2.0, API v1
 
-Machine-readable OpenAPI 3.1: `GET /api/v1/openapi.json` and `docs/openapi.json`; covers all 65 API operations plus the two health operations. Router coverage includes the identity, email and provider configuration modules.
+Machine-readable OpenAPI 3.1: `GET /api/v1/openapi.json` and `docs/openapi.json`; covers all 66 API operations plus the two health operations. Router coverage includes the identity, email and provider configuration modules.
 
 ## Account and authentication additions
 
@@ -29,7 +29,7 @@ Base `/api/v1`. Errors `{error:{code,message}}`. Browser uses HttpOnly SameSite=
 Resources have `{id,workspace_id,owner_id,kind,visibility,version,data,created_at,updated_at}`; timestamps Unix seconds. Data:
 
 - conversations: `{title,generation:0,system_prompt:"",model_id?,messages:[]}`. Messages contain `{id,role,content,created_at,run_id?,tool_calls?,tool_call_id?,citations?}`. Server owns messages/generation; initial create only title/system_prompt. Collection rows and the HTTP chat acceptance response omit `messages` and include `message_count`. GET resource returns history by default; `?include_messages=false` returns metadata. GET `/conversations/:id/messages?limit=50&before=N` returns `{items,next_before,total}` in chronological order; `next_before:null` means no earlier page. POST `/conversations/:id/reset` resets projection generation, preserves history. POST `/conversations/:id/branch` `{message_id,content}` forks history; never alters source.
-- models: `{name,provider:"openai"|"diagnostic",base_url,model,api_key?,max_tokens:2048,input_microusd_per_million?,output_microusd_per_million?,allow_private_network:false}`. API key write-only, encrypted at rest and replaced by `has_api_key`. Only instance admin may enable private network for local models; model config never contains executable paths. POST `/models/:id/test` tests actual call using same config. Diagnostic provider explicitly a local test fixture, not AI.
+- models: `{name,provider,base_url,model,api_key?,max_tokens:2048,input_microusd_per_million?,output_microusd_per_million?,allow_private_network:false}`. Provider IDs are read from installed packages declaring model capability; bundled OpenAI-compatible and diagnostic providers are examples, not a closed HTTP enum. API keys are write-only, encrypted at rest and represented in reads by `has_api_key`. Only instance admins may approve private-network access while the global policy permits it; model config never contains executable paths. POST `/models/:id/test` makes an actual model request and may incur cost. Diagnostic is an explicitly labeled local fixture, not AI.
 - knowledge: `{title,text,status:"ready",chunks:[],index_version:1}`; server builds chunks. Search GET `/knowledge/search?q=...` => `{items:[{id,title,excerpt,score,chunk}]}`. UTF-8 text/Markdown import is supported first; other formats must state unsupported. Client creation `{title,text}`.
 - memories: `{title,content,source,enabled:true,archived:false,pinned:false}`. Explicit user-maintained; no silent learning.
 - schedules: `{title,prompt,model_id,conversation_id,schedule_type:"once"|"interval"|"cron",at?:unix_seconds,interval_seconds?:integer,cron?:"0 0 9 * * *",timezone:"Asia/Taipei",enabled:true,missed_policy:"skip"}`. Server computes next_run; POST `/schedules/:id/run` manual, PATCH config version. Restored schedules disabled until explicitly enabled.
@@ -43,6 +43,10 @@ POST `/workspaces/:wid/chat` `{conversation_id,content,model_id,idempotency_key,
 GET `/workspaces/:wid/export` exports only caller-visible resources, model secrets removed. GET `/admin/backup` administrator-only offline-consistent snapshot (does not contain key); CLI restore into empty database, pauses external work. GET `/workspaces/:wid/audit` -> `{items}` metadata only, no private message content.
 
 Capabilities not implemented are `supported:false,available:false,reason` and do not produce fake successes. Never send model/plugin secrets in error bodies.
+
+## Model ID discovery
+
+Workspace administrators can call `POST /workspaces/:wid/models/discover` with `{provider,base_url,allow_private_network?,api_key?,saved_model_id?}`. The body rejects unknown fields. At most one credential source may be used: a temporary `api_key`, or `saved_model_id` referencing a visible saved model whose provider, exact base URL and private-network grant match. The endpoint invokes only the installed provider's `model.list` method. It does not generate text or reserve RstrBot budget; the provider may still log or charge the request. Temporary keys are never saved. Current session, workspace role, recovery state, private-network policy and saved model version are checked around the worker call. The response is `{items:[{id,name}],truncated,fixture}` with validated and deduplicated entries, capped at 500. The model editor keeps free text input and uses discovered IDs as suggestions, so manual IDs remain available when a provider does not support discovery or is unavailable. Diagnostic results are marked as fixtures.
 
 ## Explicit outbound delivery
 
@@ -152,3 +156,7 @@ finish in the original conversation; its late response cannot overwrite the new
 view or clear its draft. Explicit access/not-found responses hide denied cached
 content, and a later network failure cannot make it visible again. A successful
 authorized read is required to restore it.
+
+## Safe provider rejection categories
+
+Model-provider HTTP 401, 403 and 429 are exposed as `provider_authentication_failed`, `provider_access_denied` and `provider_rate_limited` in a 502 error envelope. They do not invalidate the RstrBot session. Failed run resources may include `error_code`; older records without it remain readable. Raw response bodies and credentials are not returned; unknown network outcomes remain unknown and are not replayed automatically.

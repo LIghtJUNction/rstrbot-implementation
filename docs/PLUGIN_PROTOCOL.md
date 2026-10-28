@@ -44,7 +44,7 @@ dotnet build sdk/csharp/EchoPlugin/EchoPlugin.csproj
 python3 tests/plugin_conformance.py --sdk csharp
 ```
 
-Only run the C# step where .NET 8 or a compatible SDK/targeting pack is present.
+Only run the C# step with the .NET 10 SDK.
 An absent runtime is reported as `not_executed`; it is never counted as a pass.
 The shared harness is deliberately narrower than full SDK feature acceptance:
 it exercises context binding, discovery, text/Unicode framing, progress events,
@@ -59,7 +59,7 @@ Four SDK entry points:
 | Rust | `rstrbot_plugin::sdk` | Compile a binary; see `rstrbot-diagnostic` |
 | Python | `sdk/python/rstrbot_sdk` | Python 3.11+, `await serve(Plugin(capabilities, handler))` |
 | TypeScript | `sdk/typescript/src/index.ts` | Project toolchain Node 24.22.1, `await serve(capabilities, handler)` |
-| C# | `sdk/csharp/RstrBot.Plugin` | .NET 8, `PluginServer.ServeAsync(...)` |
+| C# | `sdk/csharp/RstrBot.Plugin` | .NET 10, `PluginServer.ServeAsync(...)` |
 
 Python installs can use `uv venv /absolute/instance/venv` followed by
 `uv pip install --python /absolute/instance/venv/bin/python /path/to/pinned.whl`.
@@ -303,3 +303,7 @@ Implementation references:
 
 The release verification report records the executed commands and environments;
 it, rather than this design description, is the source for pass/fail claims.
+
+## Optional provider rejection codes
+
+A model worker that has actually received upstream HTTP 401, 403 or 429 may report JSON-RPC error codes `-32041`, `-32043` and `-32029` respectively. Use fixed, non-sensitive messages and never include the upstream response body. Older hosts may treat these as generic worker errors; unknown codes remain generic. An interrupted request is not proof of rejection. The Rust worker has local process/HTTP coverage; other SDK runtime vectors require separate verification.

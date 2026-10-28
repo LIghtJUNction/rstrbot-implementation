@@ -25,6 +25,20 @@ pub struct ChatRequest {
     pub agent_id: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelDiscoveryRequest {
+    pub provider: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub allow_private_network: bool,
+    #[serde(default)]
+    pub saved_model_id: Option<String>,
+}
+
 /// Removes an in-memory admission/run slot even if a handler/task is dropped.
 /// Its durable record remains available for reconciliation after process failure.
 struct ActiveLease {
@@ -261,6 +275,7 @@ async fn finish(
     id: &str,
     status: &str,
     error: Option<&str>,
+    error_code: Option<&str>,
     cost: Option<i64>,
 ) -> Result<(), AppError> {
     for _ in 0..5 {
@@ -275,6 +290,9 @@ async fn finish(
             "stopped"
         });
         run.data["error"] = json!(error);
+        if let Some(code) = error_code {
+            run.data["error_code"] = json!(code);
+        }
         run.data["finished_at"] = json!(chrono::Utc::now().timestamp());
         if cost.is_some() {
             run.data["cost_microusd"] = json!(cost);
@@ -286,7 +304,7 @@ async fn finish(
                     "run.finished",
                     json!({
                         "run_id":id,"conversation_id":saved.data["conversation_id"],
-                        "status":saved.data["status"],"error":saved.data["error"]
+                        "status":saved.data["status"],"error":saved.data["error"],"error_code":saved.data["error_code"]
                     }),
                 )
                 .await?;
@@ -395,7 +413,7 @@ impl Execution {
     async fn run(self, _permit: OwnedSemaphorePermit, _lease: ActiveLease) {
         let result = self.execute().await;
         let terminal = match result {
-            Ok(cost) => finish(&self.db, &self.run.id, "completed", None, cost).await,
+            Ok(cost) => finish(&self.db, &self.run.id, "completed", None, None, cost).await,
             Err(error) => {
                 let status = if error.code == "deadline_exceeded" {
                     "failed"
@@ -404,7 +422,15 @@ impl Execution {
                 } else {
                     "failed"
                 };
-                finish(&self.db, &self.run.id, status, Some(&error.message), None).await
+                finish(
+                    &self.db,
+                    &self.run.id,
+                    status,
+                    Some(&error.message),
+                    Some(&error.code),
+                    None,
+                )
+                .await
             }
         };
         if let Err(error) = terminal {
@@ -1530,6 +1556,317 @@ pub async fn test_model_authenticated(
     )
 }
 
+async fn authorize_model_discovery(
+    state: &AppState,
+    db: &Store,
+    user_id: &str,
+    workspace: &str,
+    credential: &str,
+    allow_private_network: bool,
+    saved_model: Option<&Resource>,
+) -> Result<(), AppError> {
+    if state.shutdown.is_cancelled() {
+        return Err(cancelled());
+    }
+    let current_user = db.authenticate(credential).await?;
+    if current_user.id != user_id {
+        return Err(rstrbot_store::Error::Unauthorized.into());
+    }
+    db.require_role(workspace, user_id, Role::Admin).await?;
+    if db.recovery_mode().await? {
+        return Err(AppError::conflict(
+            "Recovery mode prevents provider discovery",
+        ));
+    }
+    if allow_private_network {
+        if !current_user.instance_admin || !state.config.read().await.allow_private_network {
+            return Err(AppError::forbidden());
+        }
+    }
+    if let Some(saved_model) = saved_model {
+        let current = db.get_resource(workspace, user_id, &saved_model.id).await?;
+        if current.version != saved_model.version {
+            return Err(AppError::conflict(
+                "Saved model changed during discovery; review the current configuration",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub async fn discover_models_authenticated(
+    state: AppState,
+    user: &User,
+    workspace: &str,
+    request: ModelDiscoveryRequest,
+    credential: &str,
+) -> Result<Value, AppError> {
+    let db = state.store().await;
+    let _permit = state.capacity.clone().try_acquire_owned().map_err(|_| {
+        AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "busy",
+            "Provider discovery concurrency limit reached",
+        )
+    })?;
+    authorize_model_discovery(
+        &state,
+        &db,
+        &user.id,
+        workspace,
+        credential,
+        request.allow_private_network,
+        None,
+    )
+    .await?;
+
+    if request.provider.is_empty()
+        || request.provider.len() > 100
+        || request.provider.chars().any(char::is_control)
+    {
+        return Err(AppError::bad_request("Invalid model provider"));
+    }
+    let manifest = state
+        .packages
+        .read()
+        .await
+        .get(&request.provider)
+        .cloned()
+        .filter(|manifest| {
+            manifest
+                .capabilities
+                .iter()
+                .any(|capability| capability == "model")
+        })
+        .ok_or_else(|| AppError::bad_request("Model provider package is not installed"))?;
+    if !manifest.permits("model.list") {
+        return Err(AppError::bad_request(
+            "This model provider does not support model discovery; enter the model ID manually",
+        ));
+    }
+
+    let is_diagnostic = request.provider == "diagnostic";
+    if is_diagnostic && (request.allow_private_network || !request.base_url.is_empty()) {
+        return Err(AppError::bad_request(
+            "The diagnostic fixture does not use a network endpoint",
+        ));
+    }
+    if !is_diagnostic {
+        if request.base_url.trim().is_empty()
+            || request.base_url.trim() != request.base_url
+            || request.base_url.len() > 2048
+        {
+            return Err(AppError::bad_request(
+                "Model base URL is missing or too long",
+            ));
+        }
+        let url = url::Url::parse(&request.base_url)
+            .map_err(|_| AppError::bad_request("Invalid model URL"))?;
+        if !matches!(url.scheme(), "https" | "http")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(AppError::bad_request(
+                "Use an HTTP(S) model base URL without credentials, query or fragment",
+            ));
+        }
+        if url.scheme() != "https" && !request.allow_private_network {
+            return Err(AppError::bad_request(
+                "Public model discovery requires HTTPS; local HTTP requires instance approval",
+            ));
+        }
+    }
+
+    let api_key = request.api_key.as_deref().filter(|key| !key.is_empty());
+    if let Some(api_key) = api_key
+        && (api_key.trim().is_empty()
+            || api_key.len() > 8192
+            || api_key.chars().any(char::is_control))
+    {
+        return Err(AppError::bad_request("Invalid provider credential"));
+    }
+    if request.saved_model_id.is_some() && api_key.is_some() {
+        return Err(AppError::bad_request(
+            "Choose either a new provider credential or a saved model credential",
+        ));
+    }
+    if is_diagnostic && (api_key.is_some() || request.saved_model_id.is_some()) {
+        return Err(AppError::bad_request(
+            "The diagnostic fixture does not use provider credentials",
+        ));
+    }
+    if request
+        .saved_model_id
+        .as_deref()
+        .is_some_and(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control))
+    {
+        return Err(AppError::bad_request("Invalid saved model ID"));
+    }
+
+    let mut params = json!({
+        "base_url": request.base_url.clone(),
+        "allow_private_network": request.allow_private_network
+    });
+    let saved_model = if let Some(saved_model_id) = request.saved_model_id.as_deref() {
+        let model = db.get_resource(workspace, &user.id, saved_model_id).await?;
+        require_kind(&model, "models")?;
+        if model.data["provider"].as_str() != Some(request.provider.as_str())
+            || model.data["base_url"].as_str().unwrap_or_default() != request.base_url
+            || (model.data["allow_private_network"] == true) != request.allow_private_network
+        {
+            return Err(AppError::bad_request(
+                "Saved credentials can only be reused for the exact saved provider, URL and network grant",
+            ));
+        }
+        params = model_params(&state, &model).await?;
+        Some(model)
+    } else {
+        None
+    };
+    if let Some(api_key) = api_key {
+        params["api_key"] = json!(api_key);
+    }
+
+    let context = InstanceContext {
+        workspace_id: workspace.to_owned(),
+        instance_id: "model-discovery".into(),
+        generation: 0,
+    };
+    let user_id = user.id.clone();
+    let workspace = workspace.to_owned();
+    let credential = credential.to_owned();
+    let call_token = state.shutdown.child_token();
+    let call = state.host.call_authorized(
+        &manifest,
+        &context,
+        ("model.list", params),
+        call_token.clone(),
+        None,
+        || async {
+            authorize_model_discovery(
+                &state,
+                &db,
+                &user_id,
+                &workspace,
+                &credential,
+                request.allow_private_network,
+                saved_model.as_ref(),
+            )
+            .await
+            .map_err(|_| PluginError::Cancelled)
+        },
+    );
+    let monitor = async {
+        let mut check = tokio::time::interval(Duration::from_millis(250));
+        check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            check.tick().await;
+            if let Err(error) = authorize_model_discovery(
+                &state,
+                &db,
+                &user_id,
+                &workspace,
+                &credential,
+                request.allow_private_network,
+                saved_model.as_ref(),
+            )
+            .await
+            {
+                return error;
+            }
+        }
+    };
+    tokio::pin!(call, monitor);
+    let outcome = tokio::select! {
+        biased;
+        result = &mut call => Ok(result),
+        _ = state.shutdown.cancelled() => Err(cancelled()),
+        error = &mut monitor => Err(error),
+    };
+    let result = match outcome {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => {
+            authorize_model_discovery(
+                &state,
+                &db,
+                &user_id,
+                &workspace,
+                &credential,
+                request.allow_private_network,
+                saved_model.as_ref(),
+            )
+            .await?;
+            return Err(AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "provider_discovery_failed",
+                "Provider model discovery failed",
+            ));
+        }
+        Err(error) => {
+            call_token.cancel();
+            let _ = tokio::time::timeout(Duration::from_secs(2), &mut call).await;
+            return Err(error);
+        }
+    };
+    authorize_model_discovery(
+        &state,
+        &db,
+        &user_id,
+        &workspace,
+        &credential,
+        request.allow_private_network,
+        saved_model.as_ref(),
+    )
+    .await?;
+    normalize_discovered_models(result)
+}
+
+fn normalize_discovered_models(response: Value) -> Result<Value, AppError> {
+    let models = response["models"].as_array().ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "invalid_provider_response",
+            "Provider returned an invalid model list",
+        )
+    })?;
+    let mut ids = HashSet::new();
+    let mut items = Vec::with_capacity(models.len().min(500));
+    let mut truncated = false;
+    for model in models {
+        let Some(id) = model.get("id").and_then(Value::as_str).filter(|id| {
+            !id.trim().is_empty()
+                && id.trim() == *id
+                && id.len() <= 200
+                && !id.chars().any(char::is_control)
+        }) else {
+            continue;
+        };
+        if !ids.insert(id.to_owned()) {
+            continue;
+        }
+        if items.len() == 500 {
+            truncated = true;
+            continue;
+        }
+        let name = model
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| {
+                !name.trim().is_empty() && name.len() <= 200 && !name.chars().any(char::is_control)
+            })
+            .unwrap_or(id);
+        items.push(json!({"id":id,"name":name}));
+    }
+    Ok(json!({
+        "items":items,
+        "truncated":truncated,
+        "fixture":response["fixture"] == true
+    }))
+}
+
 /// Reconcile unfinished local runs on startup. Never redispatch them.
 pub async fn recover(state: AppState) -> Result<(), AppError> {
     let db = state.store().await;
@@ -1538,7 +1875,7 @@ pub async fn recover(state: AppState) -> Result<(), AppError> {
         let page = db.internal_list_page("runs", cursor.as_ref(), 128).await?;
         for run in page.items {
             if !is_terminal(run.data["status"].as_str().unwrap_or_default()) {
-                finish(&db, &run.id, "interrupted", Some("Server restarted before a terminal receipt was saved. No operation was replayed; costs may remain reserved"), None).await?;
+                finish(&db, &run.id, "interrupted", Some("Server restarted before a terminal receipt was saved. No operation was replayed; costs may remain reserved"), None, None).await?;
             }
             // Also repairs a crash between terminal persistence and active cleanup.
             if let Some(conversation) = run.data["conversation_id"].as_str() {

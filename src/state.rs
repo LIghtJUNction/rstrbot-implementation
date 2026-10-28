@@ -117,9 +117,21 @@ impl From<rstrbot_plugin::PluginError> for AppError {
             StatusCode::BAD_GATEWAY,
             e.code(),
             match &e {
-                rstrbot_plugin::PluginError::Remote { .. } => {
-                    "The plugin rejected the operation; check configuration".into()
-                }
+                rstrbot_plugin::PluginError::Remote { .. } => match e.code() {
+                    "provider_authentication_failed" => {
+                        "The model provider rejected the credentials; check the model configuration"
+                            .into()
+                    }
+                    "provider_access_denied" => {
+                        "The model provider denied access; check the model and provider permissions"
+                            .into()
+                    }
+                    "provider_rate_limited" => {
+                        "The model provider is rate limiting requests; wait before trying again"
+                            .into()
+                    }
+                    _ => "The plugin rejected the operation; check configuration".into(),
+                },
                 _ => e.to_string(),
             },
         )

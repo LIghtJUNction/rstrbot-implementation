@@ -8,7 +8,9 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-isolation=none tests/*.test.mjs",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "predev": "node scripts/sync-recipe-prompt.mjs",
+    "prebuild": "node scripts/sync-recipe-prompt.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "5.105.0",

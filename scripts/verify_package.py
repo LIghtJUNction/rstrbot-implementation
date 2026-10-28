@@ -27,6 +27,11 @@ sys.path.insert(0, str(ROOT / "tests"))
 from integration import Client  # noqa: E402
 
 BINARIES = ("rstrbot", "rstrbot-openai", "rstrbot-diagnostic", "rstrbot-webhook")
+DEVELOPER_DOCUMENTS = (
+    "docs/DEVELOPER_TUTORIALS.md",
+    ".agents/skills/rstrbot-development/SKILL.md",
+    ".agents/skills/rstrbot-plugin-development/SKILL.md",
+)
 
 
 def verify(archive, report):
@@ -57,9 +62,11 @@ def verify(archive, report):
                     target.chmod(0o700)
             assert set(manifest["files"]) == {info.filename for info in infos if not info.is_dir()} - {"MANIFEST.json"}
             assert all((distribution / name).is_file() for name in BINARIES)
+            assert all((distribution / name).is_file() for name in DEVELOPER_DOCUMENTS)
             report["source_commit"] = manifest["source_commit"]
             report["binary_sha256"] = {name: manifest["files"][name] for name in BINARIES}
             report["checks"].append("archive paths, executable modes and every manifest file SHA-256 verified")
+            report["checks"].append("embedded developer tutorials and both project skills are present in the release archive")
         environment = {key: value for key, value in os.environ.items() if not key.startswith("RSTRBOT_")}
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))

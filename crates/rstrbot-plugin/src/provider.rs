@@ -130,12 +130,22 @@ fn authenticated(
     }
 }
 
+fn provider_rejection(status: reqwest::StatusCode) -> RpcFailure {
+    let (code, message) = match status.as_u16() {
+        401 => (-32041, "Provider authentication failed"),
+        403 => (-32043, "Provider denied access"),
+        429 => (-32029, "Provider rate limited the request"),
+        _ => return RpcFailure::failed(&format!("Provider returned HTTP {}", status.as_u16())),
+    };
+    RpcFailure {
+        code,
+        message: message.into(),
+    }
+}
+
 async fn bounded_json(response: reqwest::Response) -> Result<Value, RpcFailure> {
     if !response.status().is_success() {
-        return Err(RpcFailure::failed(&format!(
-            "Provider returned HTTP {}",
-            response.status().as_u16()
-        )));
+        return Err(provider_rejection(response.status()));
     }
     if response
         .content_length()
@@ -274,10 +284,7 @@ async fn generate(
             RpcFailure::failed("Provider connection failed; request usage may be unknown")
         })?;
     if !response.status().is_success() {
-        return Err(RpcFailure::failed(&format!(
-            "Provider returned HTTP {}",
-            response.status().as_u16()
-        )));
+        return Err(provider_rejection(response.status()));
     }
     if !stream {
         let result = bounded_json(response).await?;

@@ -76,7 +76,7 @@ cat "$HOME/.local/share/rstrbot/bootstrap.token"
 
 ## 从源码构建
 
-仓库提供 `rust-toolchain.toml`、`mise.toml`、`Cargo.lock`、WebUI 和 TypeScript SDK 的 npm 锁文件。Rust 工具链固定为 1.99.1，Node.js 固定为 24.22.1；开发配置中的 Python 版本与各次测试实际使用版本分别记录，不把工具配置文件当作执行证明。
+`mise.toml` 固定 Rust 1.99.1、Node.js 24.22.1、Python 3.15.2 和 .NET SDK 10.0.403。C# SDK 与完整协议检查需要 .NET 10 SDK；运行 Rust 服务和 WebUI 不需要 .NET。
 
 已经安装相应 Rust 工具链、Node.js 24、本机 C 编译/链接工具以及 OpenSSL 库和头文件时：
 
@@ -96,7 +96,7 @@ cargo build --release --workspace --bins --locked
 python3 scripts/package.py --profile release
 ```
 
-打包脚本只收集已构建的程序、静态页面与说明；不会构建桌面安装器，也不应包含真实数据根、数据库、会话、密钥或个人凭据。平台名、构建类型、文件摘要以产物清单为准。
+打包脚本只收集已构建的程序、静态页面与说明；包含嵌入式 [开发者教程](docs/DEVELOPER_TUTORIALS.md) 和两份项目开发技能，供离线查阅。它不会构建桌面安装器，也不应包含真实数据根、数据库、会话、密钥或个人凭据。平台名、构建类型、文件摘要以产物清单为准。
 
 桌面是独立工作区，不会随核心构建自动安装 GTK/WebKit/Tauri 依赖。桌面准备与本机编译步骤见 [桌面工程说明](docs/DESKTOP.md)。远程连接只打开明确指定的 HTTPS 工作区，不启动本机核心；本机模式使用相同的核心程序和业务页面。
 
@@ -159,7 +159,8 @@ python3 tests/identity_integration.py --output test-results/identity.json
 | `sdk/` | 四种语言协议实现、示例与一致性向量 |
 | `tests/` | 真实进程、HTTP、MCP、缓存恢复和投递验证入口 |
 | `docs/blueprint/` | 保留原始设计、研究、52 项需求与完整需求映射 |
-| `docs/` | [API 契约](docs/API_CONTRACT.md)、[插件协议](docs/PLUGIN_PROTOCOL.md)、[WebUI](docs/UI.md)、[运维](docs/OPERATIONS.md)、[桌面](docs/DESKTOP.md)、[验收](docs/ACCEPTANCE.md) |
+| `docs/` | [开发者教程](docs/DEVELOPER_TUTORIALS.md)、[API 契约](docs/API_CONTRACT.md)、[插件协议](docs/PLUGIN_PROTOCOL.md)、[WebUI](docs/UI.md)、[运维](docs/OPERATIONS.md)、[桌面](docs/DESKTOP.md)、[验收](docs/ACCEPTANCE.md) |
+| `.agents/skills/` | 本项目开发技能与插件开发技能 |
 
 ## 许可
 

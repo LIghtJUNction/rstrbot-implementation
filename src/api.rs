@@ -2,7 +2,7 @@
 //! execution services; browser visibility never grants a capability.
 
 use crate::{
-    engine::{self, ChatRequest},
+    engine::{self, ChatRequest, ModelDiscoveryRequest},
     state::{AppError, AppState, prepare_data, sanitize_resource, sanitize_value},
 };
 use axum::{
@@ -93,6 +93,7 @@ pub fn router(state: AppState, web_dir: PathBuf) -> Router {
             post(branch_conversation),
         )
         .route("/workspaces/{wid}/models/{id}/test", post(test_model))
+        .route("/workspaces/{wid}/models/discover", post(discover_models))
         .route("/workspaces/{wid}/plugins/{id}/reload", post(reload_plugin))
         .route("/workspaces/{wid}/knowledge/search", get(search_knowledge))
         .route(
@@ -949,6 +950,22 @@ async fn test_model(
         .await?;
     Ok(Json(
         engine::test_model_authenticated(state, &user, &wid, &id, &token(&headers)?).await?,
+    ))
+}
+async fn discover_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wid): Path<String>,
+    Payload(body): Payload<ModelDiscoveryRequest>,
+) -> ApiResult<Json<Value>> {
+    let user = actor(&state, &headers).await?;
+    state
+        .store()
+        .await
+        .require_role(&wid, &user.id, Role::Admin)
+        .await?;
+    Ok(Json(
+        engine::discover_models_authenticated(state, &user, &wid, body, &token(&headers)?).await?,
     ))
 }
 async fn reload_plugin(

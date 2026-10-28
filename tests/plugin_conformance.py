@@ -93,7 +93,7 @@ def main():
     parser.add_argument("--require-all", action="store_true")
     parser.add_argument("--sdk", choices=["all", "python", "typescript", "rust", "csharp"], default="all")
     parser.add_argument("--rust-bin", default=str(ROOT / "target/debug/rstrbot-diagnostic"))
-    parser.add_argument("--dotnet-dll", default=str(ROOT / "sdk/csharp/EchoPlugin/bin/Debug/net8.0/EchoPlugin.dll"))
+    parser.add_argument("--dotnet-dll", default=str(ROOT / "sdk/csharp/EchoPlugin/bin/Debug/net10.0/EchoPlugin.dll"))
     options = parser.parse_args()
     commands = {
         "python": [sys.executable, str(ROOT / "sdk/python/examples/echo.py")],
