@@ -23,6 +23,7 @@ export function Brand({ small = false }: { small?: boolean }) {
 export function ErrorNotice({ error, onRetry, draftPreserved, onReview, onConfigureModels }: { error: unknown; onRetry?: () => void; draftPreserved?: boolean; onReview?: () => void; onConfigureModels?: () => void }) {
   const { t } = useText();
   if (!error) return null;
+  if (error instanceof ApiError && error.code === 'schedule_future_time_required') return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{t('请先编辑任务，将执行时间改为未来时间，再启用。', 'Edit the schedule to a future time before enabling it.')}</p></div>;
   if (error instanceof ApiError && error.code === 'knowledge_index_inconsistent') {
     const names = error.message.startsWith('Knowledge index inconsistent: ') ? error.message.slice('Knowledge index inconsistent: '.length) : '';
     return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><div><strong>{t('资料索引需要修复', 'A source index needs repair')}</strong>{names && <p>{t('需要修复：', 'Needs repair: ')}{names}</p>}<p>{t('模型尚未调用。请在知识库中编辑并重新保存列出的资料，再试一次。', 'No model was called. Edit and re-save the listed sources in Knowledge, then try again.')}</p></div></div>;

@@ -11,6 +11,7 @@ import http.server
 import json
 from pathlib import Path
 import platform
+import sqlite3
 import tempfile
 import threading
 import time
@@ -125,7 +126,7 @@ def exercise(binary, report):
                 assert result['data']['status'] == 'cancelled' and count('cancel') == 1, result
                 report['checks'].append('cancelled once occurrence reports cancelled and does not retry')
 
-                crashed = job('crash')
+                crashed = job('crash', interval=True, visibility='workspace')
                 wait_for(lambda: count('crash'), lambda n: n == 1, timeout=25)
                 before = wait_for(lambda: get(crashed), lambda x: bool(x['data'].get('run_id')), timeout=15)
                 claim, run_id = before['data']['claim_id'], before['data']['run_id']
@@ -140,6 +141,82 @@ def exercise(binary, report):
                     client.post(base + '/schedules/' + crashed['id'] + '/run', {}, expect=(409,))
                     instance.stop()
                 report['checks'].append('crash after model receipt preserves one claim and interrupted run through three restarts without replay; manual retry is refused')
+                instance.start(); client.login('schedule-fixture'); bob.login('schedule-member')
+                pending = get(crashed)
+                path = base + '/schedules/' + crashed['id'] + '/reconcile'
+                # The receipt can be durable even when its schedule update was
+                # lost. Resolve the run from the original admission operation.
+                with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                    database.execute("UPDATE resources SET data=json_set(data,'$.run_id',json('null')) WHERE id=?", (crashed['id'],))
+                assert get(crashed)['data']['run_id'] is None
+                bob.post(path, {'version': pending['version'], 'acknowledge': True}, expect=(403,))
+                client.post(path, {'version': pending['version'], 'acknowledge': False}, expect=(400,))
+                client.post(path, {'version': pending['version'] - 1, 'acknowledge': True}, expect=(409,))
+                with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                    database.execute("UPDATE resources SET data=json_set(data,'$.status','running') WHERE id=?", (run_id,))
+                client.post(path, {'version': pending['version'], 'acknowledge': True}, expect=(409,))
+                with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                    database.execute("UPDATE resources SET data=json_set(data,'$.status','interrupted') WHERE id=?", (run_id,))
+                before_budget = client.get(base + '/budget')
+                with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                    database.execute("CREATE TRIGGER fail_review_event BEFORE INSERT ON events WHEN NEW.kind = 'schedule.reviewed' BEGIN SELECT RAISE(ABORT, 'fixture event failure'); END")
+                client.post(path, {'version': pending['version'], 'acknowledge': True}, expect=(503,))
+                assert get(crashed)['version'] == pending['version'] and get(crashed)['data']['status'] == 'needs_reconciliation'
+                assert count('crash') == 1
+                with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                    database.execute('DROP TRIGGER fail_review_event')
+                reviewed = client.post(path, {'version': pending['version'], 'acknowledge': True})
+                assert reviewed['data']['enabled'] is False and reviewed['data']['status'] == 'paused', reviewed
+                assert reviewed['data']['last_review']['claim_id'] == claim and reviewed['data']['last_review']['run_id'] == run_id
+                assert reviewed['data']['last_review']['outcome'] == 'unknown'
+                assert client.get(base + '/budget') == before_budget and count('crash') == 1
+                client.post(path, {'version': pending['version'], 'acknowledge': True}, expect=(409,))
+                events = client.get(base + '/events?limit=500')['items']
+                review_events = [e for e in events if e['resource_id'] == crashed['id'] and e['kind'] == 'schedule.reviewed']
+                assert len(review_events) == 1 and review_events[0]['data']['claim_id'] == claim, review_events
+                assert client.get(base + '/runs/' + run_id)['data']['status'] == 'interrupted'
+                report['checks'].append('unauthorized, stale and active claims are refused; injected event failure rolls back the review; authorized review records one event without extra cost or request')
+
+                enabled = client.request('PATCH', base + '/resource/' + crashed['id'],
+                                         {'version': reviewed['version'], 'data': dict(reviewed['data'], enabled=True)})
+                assert enabled['data']['status'] == 'scheduled' and enabled['data']['next_run'] > int(time.time())
+                instance.stop(); instance.start(); client.login('schedule-fixture')
+                assert get(crashed)['data']['last_review']['claim_id'] == claim and count('crash') == 1
+                report['checks'].append('explicitly enabling a reviewed recurring schedule selects a future occurrence and survives restart without replay')
+
+                # This fixture uses an actual cancelled run but injects the
+                # uncertain schedule state to exercise the expired-once guard.
+                prior = get(cancelled)
+                with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                    database.execute("UPDATE resources SET data=json_set(data,'$.status','needs_reconciliation') WHERE id=?", (cancelled['id'],))
+                reviewed_once = client.post(base + '/schedules/' + cancelled['id'] + '/reconcile',
+                                            {'version': prior['version'], 'acknowledge': True})
+                client.request('PATCH', base + '/resource/' + cancelled['id'],
+                               {'version': reviewed_once['version'], 'data': dict(reviewed_once['data'], enabled=True)}, expect=(400,))
+                future = client.request('PATCH', base + '/resource/' + cancelled['id'],
+                                        {'version': reviewed_once['version'], 'data': dict(reviewed_once['data'], enabled=True, at=int(time.time()) + 3600)})
+                assert future['data']['status'] == 'scheduled' and future['data']['next_run'] > int(time.time())
+                assert count('cancel') == 1
+                report['checks'].append('expired one-time schedule requires an explicitly edited future time; old request is not replayed')
+
+                bob.login('schedule-member')
+                shared_model = create('models', {'name': 'Shared local fixture', 'provider': 'openai', 'model': 'fixture',
+                                      'base_url': f'http://127.0.0.1:{receiver.server_port}/v1', 'allow_private_network': True}, 'workspace')
+                bob_conversation = bob.post(base + '/resources/conversations', {'visibility': 'private', 'data': {'title': 'Member fixture'}})
+                bob_schedule = bob.post(base + '/resources/schedules', {'visibility': 'private', 'data': {
+                    'title': 'Member schedule', 'prompt': 'fixture-success', 'model_id': shared_model['id'],
+                    'conversation_id': bob_conversation['id'], 'schedule_type': 'once', 'at': int(time.time()) + 3600, 'enabled': False}})
+                with sqlite3.connect(instance.directory / 'rstrbot.db') as database:
+                    database.execute("UPDATE resources SET data=json_set(data,'$.status','needs_reconciliation','$.claim_id','simulated-claim') WHERE id=?", (bob_schedule['id'],))
+                client.post(base + '/members', {'user_id': bob_id, 'role': 'viewer'})
+                bob.post(base + '/schedules/' + bob_schedule['id'] + '/reconcile',
+                         {'version': bob_schedule['version'], 'acknowledge': True}, expect=(403,))
+                client.post(base + '/members', {'user_id': bob_id, 'role': 'member'})
+                no_run = bob.post(base + '/schedules/' + bob_schedule['id'] + '/reconcile',
+                                  {'version': bob_schedule['version'], 'acknowledge': True})
+                assert no_run['data']['last_review']['run_id'] is None and no_run['data']['last_review']['outcome'] == 'unknown'
+                assert no_run['data']['enabled'] is False
+                report['checks'].append('downgraded owner is denied; a permitted review without any run receipt remains unknown and paused')
                 report['request_counts'] = {name: count(name) for name in ('success', 'failure', 'repeat', 'cancel', 'crash')}
             finally:
                 instance.stop()

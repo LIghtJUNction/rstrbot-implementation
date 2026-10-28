@@ -300,6 +300,102 @@ impl Store {
         Ok(resource)
     }
 
+    /// Record the owner's review of an uncertain schedule without dispatching it.
+    /// The review and its event share the same transaction and version check.
+    pub async fn review_schedule(
+        &self,
+        workspace: &str,
+        user: &str,
+        id: &str,
+        expected_version: i64,
+    ) -> Result<Resource> {
+        let mut tx = self.pool.begin().await?;
+        lock_workspace(&mut tx, workspace).await?;
+        let role = role_in(&mut tx, workspace, user).await?;
+        if role < Role::Member {
+            return Err(Error::Forbidden);
+        }
+        let mut schedule = resource_in(&mut tx, workspace, id).await?;
+        if schedule.visibility == Visibility::Private && schedule.owner_id != user {
+            return Err(Error::NotFound);
+        }
+        if schedule.kind != "schedules" || schedule.owner_id != user {
+            return Err(Error::Forbidden);
+        }
+        if schedule.version != expected_version
+            || !matches!(
+                schedule.data["status"].as_str(),
+                Some("unknown" | "needs_reconciliation")
+            )
+            || schedule.data["enabled"] != false
+        {
+            return Err(Error::Conflict);
+        }
+        let claim = schedule.data["claim_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or(Error::Conflict)?
+            .to_owned();
+        let mut run_id = schedule.data["run_id"].as_str().map(str::to_owned);
+        if run_id.is_none() {
+            let operation = sqlx::query("SELECT state, result FROM operations WHERE workspace_id = $1 AND user_id = $2 AND operation_key = $3")
+                .bind(workspace).bind(user).bind(&claim).fetch_optional(&mut *tx).await?;
+            if let Some(row) = operation {
+                if row.try_get::<String, _>("state")? != "complete" {
+                    return Err(Error::Conflict);
+                }
+                let receipt: Value = serde_json::from_str(&row.try_get::<String, _>("result")?)?;
+                run_id = Some(
+                    receipt["run_id"]
+                        .as_str()
+                        .ok_or(Error::Conflict)?
+                        .to_owned(),
+                );
+            }
+        }
+        if let Some(run_id) = &run_id {
+            let run = resource_in(&mut tx, workspace, run_id).await?;
+            if run.kind != "runs"
+                || run.owner_id != user
+                || run.data["conversation_id"] != schedule.data["conversation_id"]
+                || !matches!(
+                    run.data["status"].as_str(),
+                    Some("completed" | "failed" | "cancelled" | "interrupted")
+                )
+            {
+                return Err(Error::Conflict);
+            }
+        }
+        let reviewed_at = now();
+        let review = serde_json::json!({"claim_id":claim,"run_id":run_id,"scheduled_for":schedule.data["scheduled_for"],"reviewed_by":user,"reviewed_at":reviewed_at,"outcome":"unknown"});
+        schedule.data["last_review"] = review.clone();
+        schedule.data["status"] = "paused".into();
+        schedule.data["last_error"] = Value::Null;
+        if let Some(run_id) = run_id {
+            schedule.data["run_id"] = run_id.into();
+        }
+        let version = expected_version.checked_add(1).ok_or(Error::Conflict)?;
+        let changed = sqlx::query("UPDATE resources SET data = $1, version = $2, updated_at = $3 WHERE id = $4 AND workspace_id = $5 AND version = $6")
+            .bind(encode_data(&schedule.data)?).bind(version).bind(reviewed_at).bind(id).bind(workspace).bind(expected_version).execute(&mut *tx).await?.rows_affected();
+        if changed != 1 {
+            return Err(Error::Conflict);
+        }
+        record_event(
+            &mut tx,
+            workspace,
+            user,
+            schedule.visibility,
+            id,
+            "schedule.reviewed",
+            &review,
+        )
+        .await?;
+        tx.commit().await?;
+        schedule.version = version;
+        schedule.updated_at = reviewed_at;
+        Ok(schedule)
+    }
+
     pub async fn delete_resource(
         &self,
         workspace: &str,

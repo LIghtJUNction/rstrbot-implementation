@@ -103,3 +103,5 @@ mise exec -- ./scripts/check.sh
 运行 `python3 tests/knowledge_lifecycle.py` 可使用隔离 SQLite 和本地合成模型，核对文档改版、删除和重启后的实际模型输入。这个检查不覆盖外部索引、多连接 WAL、商业模型或所有竞态；索引视图与代次测试见 RSTRBOT-31。
 
 For scheduled work, inspect the latest run result separately from the next scheduled occurrence. An interrupted claim requires reviewing its run and destination before any new intention; restart does not automatically replay it. Exercise the local crash and request-ledger scenario with `python3 tests/schedule_outcomes.py` after building the core.
+
+Interrupted schedules can be reviewed by their owner with current member permissions. The confirmation records the old claim and leaves the schedule paused; it does not establish the old model or delivery outcome. Enable a recurring plan separately for a future occurrence. For an expired one-time plan, edit the time before enabling. Check `tests/schedule_outcomes.py` for the request ledger and authorization boundaries.

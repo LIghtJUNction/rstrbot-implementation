@@ -104,6 +104,10 @@ pub fn router(state: AppState, web_dir: PathBuf) -> Router {
             "/workspaces/{wid}/schedules/{id}/run",
             post(trigger_schedule),
         )
+        .route(
+            "/workspaces/{wid}/schedules/{id}/reconcile",
+            post(reconcile_schedule),
+        )
         .route("/workspaces/{wid}/events", get(events))
         .route("/workspaces/{wid}/audit", get(audit))
         .route("/workspaces/{wid}/budget", get(budget).put(set_budget))
@@ -771,8 +775,17 @@ async fn update_resource(
     store
         .require_role(&wid, &user.id, minimum_role(&previous.kind))
         .await?;
+    let requested_enable =
+        previous.kind == "schedules" && body.data.get("enabled") == Some(&Value::Bool(true));
     let mut data = prepare_data(&state, &user, &previous.kind, body.data, Some(&previous)).await?;
     if previous.kind == "schedules" {
+        if requested_enable && data["enabled"] != true {
+            return Err(AppError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "schedule_future_time_required",
+                "Choose a future time before enabling this schedule",
+            ));
+        }
         if matches!(
             previous.data["status"].as_str(),
             Some("unknown" | "needs_reconciliation")
@@ -786,6 +799,19 @@ async fn update_resource(
             if let Some(value) = previous.data.get(*key) {
                 data[*key] = value.clone();
             }
+        }
+        if previous.data["enabled"] != data["enabled"]
+            && !matches!(
+                previous.data["status"].as_str(),
+                Some("dispatching" | "running" | "queued" | "unknown" | "needs_reconciliation")
+            )
+        {
+            data["status"] = if data["enabled"] == true {
+                "scheduled"
+            } else {
+                "paused"
+            }
+            .into();
         }
     }
     let record = store
@@ -1044,6 +1070,32 @@ async fn trigger_schedule(
     Ok(Json(
         crate::schedule::trigger(state, &user, &wid, &id).await?,
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReconcileScheduleInput {
+    version: i64,
+    acknowledge: bool,
+}
+async fn reconcile_schedule(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((wid, id)): Path<(String, String)>,
+    Payload(body): Payload<ReconcileScheduleInput>,
+) -> ApiResult<Json<Resource>> {
+    let user = actor(&state, &headers).await?;
+    if !body.acknowledge {
+        return Err(AppError::bad_request(
+            "Confirm that you reviewed the uncertain result",
+        ));
+    }
+    let resource = state
+        .store()
+        .await
+        .review_schedule(&wid, &user.id, &id, body.version)
+        .await?;
+    Ok(Json(sanitize_resource(resource)))
 }
 
 async fn events(

@@ -22,6 +22,7 @@ const PROTECTED_FIELDS: &[&str] = &[
     "last_run",
     "last_error",
     "last_result",
+    "last_review",
 ];
 
 fn required<'a>(data: &'a Value, key: &str, limit: usize) -> Result<&'a str, AppError> {

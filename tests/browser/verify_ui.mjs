@@ -235,6 +235,19 @@ try {
       await page.getByRole('dialog').getByRole('button', { name: 'View related run' }).click();
       await page.getByRole('dialog', { name: 'Run details' }).getByText(result.data.run_id, { exact: true }).waitFor();
       await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
+      await nav('Schedules');
+      await row.getByRole('button', { name: 'Failed schedule fixture', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Review and record' }).click();
+      const review = page.getByRole('dialog', { name: 'Review interrupted schedule' });
+      assert.equal(await review.getByRole('button', { name: 'Record review' }).isDisabled(), true);
+      await review.getByLabel('I checked the available records and understand the previous outcome may remain unknown.').check();
+      await review.getByRole('button', { name: 'Record review' }).click();
+      const reviewed = await until(async () => { const current = await api('GET', `${wp()}/resource/${schedule.id}`); return current.data.status === 'paused' && current; }, 'review is saved and paused');
+      assert.equal(reviewed.data.last_review.outcome, 'unknown');
+      assert.equal(reviewed.data.last_review.run_id, result.data.run_id);
+      await row.getByRole('button', { name: 'Enable', exact: true }).click();
+      await page.getByText('Edit the schedule to a future time before enabling it.', { exact: true }).waitFor();
+      assert.equal((await api('GET', `${wp()}/resource/${schedule.id}`)).data.enabled, false);
     } finally {
       await api('DELETE', `${wp()}/resource/${document.id}?version=${document.version}`, undefined, [204]);
     }
