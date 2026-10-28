@@ -1,4 +1,4 @@
-# RstrBot 重建提示词 1.15 · 完整能力合同与验收覆盖
+# RstrBot 重建提示词 1.16 · 完整能力合同与验收覆盖
 
 ## 目标与用户确认
 
@@ -46,7 +46,7 @@ generated/rstrbot-implementation/是固定提交的既有实现与未来重建�
 
 ## 1.12 端到端对比与上游问题反馈
 
-用户目标：端到端测试，比AstrBot、MainBot好用，全面超越OpenClaw，并把OpenClaw的issue转成本项目配方改进。按[COMPETITIVE_ACCEPTANCE.md](COMPETITIVE_ACCEPTANCE.md)冻结对比版本、环境、模型、相同任务和证据；先补齐能力与安全门槛，再比较操作负担、恢复和实测性能，不将愿景或Agent模拟当作已经超越。MainBot准确仓库待确认，目前仅记录MaiBot候选，不悄悄替换名称。首批线索见[OPENCLAW_FEEDBACK.md](OPENCLAW_FEEDBACK.md)。每条上游issue保留链接、报告版本、当前状态、关键评论/修复结论、适用性与本地复现状态，映射合同和可运行验收；已关闭/已修复问题作为回归素材，不冒称竞品现存缺陷。本轮委托Pro交付可直接应用的完整配方增量、覆盖索引和验收；当前生成实现仍为1.11修复版本。
+用户目标：端到端测试，比AstrBot、MainBot好用，全面超越OpenClaw，并把OpenClaw的issue转成本项目配方改进。按[COMPETITIVE_ACCEPTANCE.md](COMPETITIVE_ACCEPTANCE.md)冻结对比版本、环境、模型、相同任务和证据；先补齐能力与安全门槛，再比较操作负担、恢复和实测性能，不将愿景或Agent模拟当作已经超越。用户已确认所说 MainBot 是 MaiBot（麦麦），对比对象为官方 Mai-with-u/MaiBot。首批线索见[OPENCLAW_FEEDBACK.md](OPENCLAW_FEEDBACK.md)。每条上游issue保留链接、报告版本、当前状态、关键评论/修复结论、适用性与本地复现状态，映射合同和可运行验收；已关闭/已修复问题作为回归素材，不冒称竞品现存缺陷。本轮委托Pro交付可直接应用的完整配方增量、覆盖索引和验收；当前生成实现仍为1.11修复版本。
 
 ## 1.13 完整能力合同的执行入口
 
@@ -58,7 +58,7 @@ generated/rstrbot-implementation/是固定提交的既有实现与未来重建�
 
 当前HTTP v1的66个API与2个健康操作、插件协议1.0及既有只读工具范围继续有效。未来HTTP v2草案/插件1.1-draft必须在各自协议合同中显式协商并经测试才开放；旧客户端不因配方版本升级获得新操作，v1不接收伪造的未来字段来绕过边界。代码生成输出仍在generated/<implementation-name>/，配方内只放UTF-8 Markdown。
 
-按 [COMPETITIVE_ACCEPTANCE.md](COMPETITIVE_ACCEPTANCE.md)、[COMPETITIVE_RUNBOOK.md](COMPETITIVE_RUNBOOK.md)、[OPENCLAW_FEEDBACK.md](OPENCLAW_FEEDBACK.md) 执行12个共同任务和上游问题回归。MainBot准确身份待确认，MaiBot只作候选。跨产品任务只有实际执行且附版本、下游与重启证据才可更新状态；未执行项保持not_executed，缺能力单列gap，历史issue关闭/合并、文档或机器人分析不算本次产品失败或成功。任何领先声明须通过合同中的证据门槛。
+按 [COMPETITIVE_ACCEPTANCE.md](COMPETITIVE_ACCEPTANCE.md)、[COMPETITIVE_RUNBOOK.md](COMPETITIVE_RUNBOOK.md)、[OPENCLAW_FEEDBACK.md](OPENCLAW_FEEDBACK.md) 执行12个共同任务和上游问题回归。用户确认 MainBot 指 MaiBot（麦麦）；按固定版本正式纳入共同任务，未执行的项目仍保持 not_executed。跨产品任务只有实际执行且附版本、下游与重启证据才可更新状态；未执行项保持not_executed，缺能力单列gap，历史issue关闭/合并、文档或机器人分析不算本次产品失败或成功。任何领先声明须通过合同中的证据门槛。
 
 实质待决与默认见 [DECISIONS.md](DECISIONS.md)。先完成已有授权的无外发、合成数据、隔离夹具验收；真实付费模型、商业平台、原生设备、CI和发布需要实际可用环境及覆盖相应数据、目标和费用的有效授权；已有授权不重复索取。Pro本轮仅交付配方，不触发这些动作，也不把条件缺失伪造成软件缺陷。
 
@@ -71,3 +71,7 @@ generated/rstrbot-implementation/是固定提交的既有实现与未来重建�
 ## 1.15 生成实现子模块
 
 按用户后续要求，主仓库和项目名保持 RstrBot，生成实现由独立源码仓库和 `generated/rstrbot-implementation/` gitlink 固定；克隆时初始化递归子模块。保留来源基线及实际本地改动，源码仓库不进入递归配方、配方归档或重建依赖。正在运行的旧路径可暂以本机兼容链接维护，不能作为第二份源码或提交到主仓库。验收要核对远程真实gitlink、子模块URL及提交、干净克隆递归初始化、源码内容与许可、无秘密/构建残留；配方离开源码仍能检查和打包。
+
+## 1.16 竞品身份与后台请求
+
+用户于2026-10-29确认 MainBot 指 MaiBot（麦麦），以 Mai-with-u/MaiBot 官方版本纳入对比；确认身份不等于测试结果。首次对话默认只因用户明确发送而调用模型；会话标题优先使用本地规则，不为标题隐式发起第二次模型请求。若未来提供模型生成标题，须先明示额外请求、潜在费用及数据范围并由用户主动启用；失败不损坏对话，未知费用不记为零。以独立模型账本核对初次发送、刷新和重启请求数，来源观察、模拟范围和未完成项见 COMPETITIVE_RUNBOOK、TEST_FEEDBACK 和 ACCEPTANCE。

@@ -29,3 +29,5 @@ Use the smallest relevant local checks first. The repository-wide local check is
 Browser-local drafts and versions are private user state: scope them by instance origin and authenticated user, retain unattributed legacy records without automatic adoption, and clear stale views on session changes. Use the real read-only schedule preview. Preserve uncertain requests for record review and explicit idempotent continuation, never automatic replay. Run `tests/browser/verify_feedback.mjs` and relevant configuration regressions against an isolated instance; report real-provider and native-device acceptance separately.
 
 Provider rejection codes `-32041`, `-32043`, and `-32029` have optional 1.0-compatible behavior documented in `docs/PLUGIN_PROTOCOL.md`. Preserve generic fallback for old workers/hosts, do not reveal response bodies, and test each SDK runtime separately. The source lives in the pinned implementation submodule; it is not part of the recipe payload.
+
+1.16 用户确认 MaiBot 为对比对象。首次对话默认不为标题另发模型请求；可选模型标题需用户主动启用并说明请求、费用和数据范围。按RSTRBOT-22核对账本，模拟结果不代表整体领先。
