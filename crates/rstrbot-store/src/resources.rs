@@ -87,6 +87,11 @@ impl Store {
         {
             return Err(Error::NotFound);
         }
+        if conversation.visibility == Visibility::Workspace
+            && model.visibility == Visibility::Private
+        {
+            return Err(Error::Forbidden);
+        }
         let agent = match request.agent_id.as_deref() {
             Some(id) => {
                 let resource = resource_in(&mut tx, workspace, id).await?;
@@ -134,6 +139,8 @@ impl Store {
             .ok_or_else(|| Error::Invalid("conversation history is invalid".into()))?;
         history.push(serde_json::json!({"id":new_id(),"role":"user","content":request.content,"run_id":run.id,"generation":generation,"created_at":created_at}));
         conversation.data["active_run"] = serde_json::json!(run.id);
+        // Record the target in the same transaction as the accepted user turn.
+        conversation.data["last_model_id"] = serde_json::json!(model.id);
         let history = encode_data(&conversation.data)?;
         if history.len() > 7 * 1024 * 1024 {
             return Err(Error::Invalid(

@@ -160,3 +160,7 @@ authorized read is required to restore it.
 ## Safe provider rejection categories
 
 Model-provider HTTP 401, 403 and 429 are exposed as `provider_authentication_failed`, `provider_access_denied` and `provider_rate_limited` in a 502 error envelope. They do not invalidate the RstrBot session. Failed run resources may include `error_code`; older records without it remain readable. Raw response bodies and credentials are not returned; unknown network outcomes remain unknown and are not replayed automatically.
+
+## 会话模型绑定（1.18）
+
+成功接纳聊天运行时，会话元数据的可选 `last_model_id` 与用户消息和运行在同一事务写入；幂等重放不改变已有绑定。旧会话可能没有该字段。共享会话使用私有模型会被拒绝，拒绝不创建用户消息或运行；模型删除或失去访问权时客户端必须要求重新选择。

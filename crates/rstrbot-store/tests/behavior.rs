@@ -1404,3 +1404,117 @@ async fn shared_run_cannot_publish_a_private_agent_snapshot() {
     assert_eq!(private_run.run.visibility, Visibility::Private);
     assert_eq!(private_run.run.data["agent_snapshot"], private_agent.data);
 }
+
+#[tokio::test]
+async fn admitted_model_is_bound_to_the_conversation_without_exposing_private_models() {
+    let (store, user, workspace, _dir) = initialized().await;
+    let alpha = store
+        .create_resource(
+            &workspace,
+            &user.id,
+            "models",
+            Visibility::Workspace,
+            json!({"provider":"diagnostic","model":"alpha"}),
+        )
+        .await
+        .unwrap();
+    let beta = store
+        .create_resource(
+            &workspace,
+            &user.id,
+            "models",
+            Visibility::Workspace,
+            json!({"provider":"diagnostic","model":"beta"}),
+        )
+        .await
+        .unwrap();
+    let private_model = store
+        .create_resource(
+            &workspace,
+            &user.id,
+            "models",
+            Visibility::Private,
+            json!({"provider":"diagnostic","model":"private"}),
+        )
+        .await
+        .unwrap();
+    let conversation = store
+        .create_resource(
+            &workspace,
+            &user.id,
+            "conversations",
+            Visibility::Private,
+            json!({"title":"Chat","messages":[],"generation":0}),
+        )
+        .await
+        .unwrap();
+    let first = store
+        .admit_run(
+            &workspace,
+            &user.id,
+            run_intent(&conversation.id, &alpha.id, "one"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.conversation.data["last_model_id"], alpha.id);
+    let mut current = store
+        .get_resource(&workspace, &user.id, &conversation.id)
+        .await
+        .unwrap();
+    current.data["active_run"] = serde_json::Value::Null;
+    store
+        .update_resource(
+            &workspace,
+            &user.id,
+            &current.id,
+            current.version,
+            current.data,
+        )
+        .await
+        .unwrap();
+    let second = store
+        .admit_run(
+            &workspace,
+            &user.id,
+            run_intent(&conversation.id, &beta.id, "two"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.conversation.data["last_model_id"], beta.id);
+    let replay = store
+        .admit_run(
+            &workspace,
+            &user.id,
+            run_intent(&conversation.id, &alpha.id, "one"),
+        )
+        .await
+        .unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.conversation.data["last_model_id"], beta.id);
+    let shared = store
+        .create_resource(
+            &workspace,
+            &user.id,
+            "conversations",
+            Visibility::Workspace,
+            json!({"title":"Shared","messages":[],"generation":0}),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .admit_run(
+                &workspace,
+                &user.id,
+                run_intent(&shared.id, &private_model.id, "private"),
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
+    let shared_after = store
+        .get_resource(&workspace, &user.id, &shared.id)
+        .await
+        .unwrap();
+    assert!(shared_after.data["last_model_id"].is_null());
+    assert_eq!(shared_after.data["messages"].as_array().unwrap().len(), 0);
+}

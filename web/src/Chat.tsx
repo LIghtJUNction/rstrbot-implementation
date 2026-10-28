@@ -66,6 +66,7 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
   const [system, setSystem] = useState(''); const [visibility, setVisibility] = useState('private'); const [sidebar, setSidebar] = useState(false); const [conversationCollapsed, setConversationCollapsed] = useState(() => safePreference(`conversation-list-collapsed:${user.id}:${wid}`) === 'true'); const [confirm, setConfirm] = useState<'reset' | 'delete' | null>(null);
   const [branch, setBranch] = useState<Message | null>(null); const [branchText, setBranchText] = useState(''); const [hasNew, setHasNew] = useState(false);
   const idempotency = useRef<{ text: string; key: string } | null>(null); const messagesRef = useRef<HTMLDivElement>(null); const follow = useRef(true); const composing = useRef(false); const viewGeneration = useRef(0);
+  const modelRestoredFor = useRef<string | null>(null);
   const draftVersion = useRef({ text: draft, revision: 0 });
   const readingPositions = useRef(new Map<string, { top: number; following: boolean }>());
   const restoreReadingPosition = useRef(false);
@@ -76,9 +77,12 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
   // second operation or overwrite persisted drafts after their view is gone.
   useLayoutEffect(() => () => { viewGeneration.current += 1; }, []);
   const unavailable = conversation.unavailable || history.unavailable;
+  const sharedConversation = (selected ? conversation.data?.visibility : visibility) === 'workspace';
   const chosenModel = useResource(wid, model || null);
-  const selectableModels = models.data ?? [];
-  const modelOptions = chosenModel.data?.kind === 'models' && !selectableModels.some(item => item.id === model) ? [...selectableModels, chosenModel.data] : selectableModels;
+  const modelAllowed = chosenModel.data?.kind === 'models' && (!sharedConversation || chosenModel.data.visibility === 'workspace');
+  const modelAvailable = !!model && !chosenModel.unavailable && !chosenModel.error && modelAllowed && chosenModel.data?.id === model;
+  const selectableModels = (models.data ?? []).filter(item => !sharedConversation || item.visibility === 'workspace');
+  const modelOptions = modelAllowed && chosenModel.data && !selectableModels.some(item => item.id === model) ? [...selectableModels, chosenModel.data] : selectableModels;
   const activeRunId = value(conversation.data?.data ?? {}, 'active_run');
   const activeRunQuery = useResource(wid, activeRunId || null, activeRunId ? 1500 : undefined);
   const activeRun = unavailable ? undefined : activeRunQuery.data && ['queued', 'running'].includes(value(activeRunQuery.data.data, 'status')) ? activeRunQuery.data : runs.data?.find(run => value(run.data, 'conversation_id') === selected && ['queued', 'running'].includes(value(run.data, 'status')));
@@ -89,18 +93,22 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
   const stream = activeRun ? live[activeRun.id] ?? value(activeRun.data, 'content') : '';
   const visibleConversations = conversations.data?.filter(c => value(c.data, 'title').toLocaleLowerCase().includes(search.toLocaleLowerCase())) ?? [];
   const writable = !unavailable && (selected ? !!conversation.data && canWriteResource(workspace.role, user, conversation.data) : roleAllows(workspace.role, 'member'));
-  const sharedConversation = (selected ? conversation.data?.visibility : visibility) === 'workspace';
   const availableAgents = (agents.data ?? []).filter(candidate => !sharedConversation || candidate.visibility === 'workspace');
   useEffect(() => {
     if (sharedConversation && agents.data?.some(candidate => candidate.id === agent && candidate.visibility === 'private')) setAgent('');
   }, [sharedConversation, agents.data, agent]);
   useEffect(() => {
-    if (models.data?.length && !model) setModel(models.data[0].id);
-  }, [models.data, model]);
+    if (!selected && selectableModels.length && !model) setModel(selectableModels[0].id);
+  }, [selectableModels, model, selected]);
+  useEffect(() => {
+    if (!selected || conversation.data?.id !== selected || modelRestoredFor.current === selected) return;
+    modelRestoredFor.current = selected;
+    setModel(value(conversation.data.data, 'last_model_id'));
+  }, [selected, conversation.data]);
   function selectAgent(id: string) {
     setAgent(id);
     const configuredModel = agents.data?.find(candidate => candidate.id === id)?.data.model_id;
-    if (typeof configuredModel === 'string' && configuredModel) setModel(configuredModel);
+    if (typeof configuredModel === 'string' && configuredModel) { modelRestoredFor.current = selected; setModel(configuredModel); }
   }
   function selectConversation(id: string | null) {
     if (id === selected) { setSidebar(false); return; }
@@ -108,6 +116,7 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
     restoreReadingPosition.current = true; olderPageAnchor.current = null;
     const text = safePreference(`${draftPrefix}:${id ?? 'new'}`);
     viewGeneration.current += 1; draftVersion.current = { text, revision: draftVersion.current.revision + 1 };
+    modelRestoredFor.current = null; setModel(''); setAgent('');
     setBusy(false); setSelected(id); setDraft(text); follow.current = true; setHasNew(false); idempotency.current = null; setSidebar(false); setError(null); setConfirm(null); setBranch(null);
   }
   const lastMessage = messages.at(-1);
@@ -149,7 +158,7 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
     return unwrap(await post<Resource>(collectionPath(wid, 'conversations'), { visibility, data: { title: title || draft.slice(0, 48) || t('新对话', 'New conversation'), system_prompt: system } }));
   }
   async function send(e?: React.FormEvent) {
-    e?.preventDefault(); const text = draft.trim(); if (!text || busy || activeRun || !model || !writable) return;
+    e?.preventDefault(); const text = draft.trim(); if (!text || busy || activeRun || !modelAvailable || !writable) return;
     setBusy(true); setError(null);
     const generation = viewGeneration.current;
     const submittedRevision = draftVersion.current.revision;
@@ -163,7 +172,7 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
         // Creating an empty conversation may have completed, but changing the
         // view before its acknowledgement cancels the not-yet-sent message.
         if (viewGeneration.current !== generation) return;
-        setSelected(created.id);
+        modelRestoredFor.current = created.id; setSelected(created.id);
         savePreference(`${draftPrefix}:${created.id}`, draftVersion.current.text);
         savePreference(`${draftPrefix}:new`, '');
         client.setQueryData([wid, 'resource', created.id], created);
@@ -207,10 +216,10 @@ export default function Chat({ workspace, user, goModels }: { workspace: Workspa
         {unavailable ? <Empty title={t('这段对话已不可用', 'This conversation is no longer available')} description={t('对话可能已删除，或你的访问权限已被撤销。请从列表选择其他对话。', 'It may have been deleted or your access was revoked. Choose another conversation from the list.')} /> : selected && (conversation.isPending || history.isPending) ? <Loading /> : !messages.length ? <div className="chat-welcome"><div className="welcome-mark"><Brand small /></div><h2>{t('今天，从哪里开始？', 'What are we working on?')}</h2><p>{t('提出问题，探索资料，或把想法变成下一步。', 'Ask a question, explore your sources, or turn an idea into a plan.')}</p><div className="suggestions">{[[t('理清一个想法', 'Think through an idea'), t('帮我理清这个想法：', 'Help me think through this idea: ')], [t('从资料中找答案', 'Find an answer in my knowledge'), t('请根据我的知识库，回答：', 'Using my knowledge, answer: ')], [t('列出下一步', 'Plan the next step'), t('帮我把目标分成可以执行的步骤：', 'Help me break this goal into actionable steps: ')]].map(([label, text]) => <button key={label} onClick={() => { updateDraft(text); document.getElementById('composer-input')?.focus(); }}>{label}<ArrowUp size={14} /></button>)}</div></div> : <div className="message-column">{history.hasNextPage && <Button variant="ghost" busy={history.isFetchingNextPage} onClick={() => void loadOlderMessages()}>{t('显示更早的消息', 'Show earlier messages')}</Button>}{messages.map((message, index) => <MessageView key={message.id ?? `${message.role}:${index}`} message={message} onBranch={message.role === 'user' && message.id && writable && !activeRun ? () => { setBranch(message); setBranchText(message.content); } : undefined} />)}{activeRun && <article className="message assistant"><div className="message-byline"><Brand small /><Status state={value(activeRun.data, 'status')} /></div><div className="message-body">{stream || t('正在准备…', 'Preparing…')}<span className="stream-caret" aria-hidden="true" /></div></article>}</div>}
       </div>
       {hasNew && <Button className="new-content" onClick={() => { follow.current = true; messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' }); setHasNew(false); }}><ArrowDown size={16} />{t('有新内容', 'New content')}</Button>}
-      <div className="composer-wrap"><ErrorNotice error={error || runError || history.error || conversation.error || conversations.error || models.error || agents.error || chosenModel.error || activeRunQuery.error} draftPreserved onConfigureModels={goModels} onReview={() => { void client.invalidateQueries({ queryKey: [wid] }); }} />{!!eventError && <p className="connection-warning" role="status">{t('连接暂时中断，正在按记录游标恢复。', 'Connection interrupted. Resuming from the saved event cursor.')}</p>}
+      <div className="composer-wrap"><ErrorNotice error={error || runError || history.error || conversation.error || conversations.error || models.error || agents.error || (chosenModel.unavailable ? null : chosenModel.error) || activeRunQuery.error} draftPreserved onConfigureModels={goModels} onReview={() => { void client.invalidateQueries({ queryKey: [wid] }); }} />{!!eventError && <p className="connection-warning" role="status">{t('连接暂时中断，正在按记录游标恢复。', 'Connection interrupted. Resuming from the saved event cursor.')}</p>}{chosenModel.unavailable && <p className="connection-warning" role="status">{t('上次使用的模型已删除或无权访问，请选择其他模型。', 'The last model was removed or is no longer accessible. Choose another model.')}</p>}
         {sharedConversation && <p className="connection-warning">{t('共享会话仅可使用工作区共享的代理。', 'Shared conversations can use workspace-shared agents only.')}</p>}
         {!models.isPending && !models.data?.length && <div className="model-needed"><CpuIcon /><span>{t('接入一个模型，就可以开始对话。', 'Connect a model to start a conversation.')}</span><Button variant="text" onClick={goModels}>{t('配置模型', 'Connect model')}</Button></div>}
-        <form className="composer" onSubmit={send}><textarea id="composer-input" aria-label={t('消息', 'Message')} placeholder={!writable ? t('你只能查看这段对话', 'You can view this conversation only') : t('说说你的想法…', 'What’s on your mind?')} value={draft} onChange={e => updateDraft(e.target.value)} rows={3} maxLength={100000} disabled={!writable} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !composing.current && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} /><div className="composer-toolbar"><div className="composer-selects"><label><span className="sr-only">{t('选择模型', 'Select model')}</span><select value={model} onChange={e => setModel(e.target.value)} disabled={!!activeRun}><option value="">{t('选择模型', 'Select model')}</option>{modelOptions.map(m => <option value={m.id} key={m.id}>{value(m.data, 'name', value(m.data, 'model'))}</option>)}</select></label>{!!agents.data?.length && <label><span className="sr-only">{t('选择代理', 'Select agent')}</span><select value={agent} onChange={e => selectAgent(e.target.value)} disabled={!!activeRun}><option value="">{t('默认助手', 'Default assistant')}</option>{availableAgents.map(a => <option key={a.id} value={a.id}>{value(a.data, 'name')}</option>)}</select></label>}</div>{activeRun ? <Button type="button" variant="stop" onClick={cancel}><Square size={15} fill="currentColor" />{t('停止', 'Stop')}</Button> : <Button type="submit" variant="primary send" aria-label={t('发送消息', 'Send message')} disabled={!draft.trim() || !model || !writable} busy={busy}><ArrowUp size={20} /></Button>}</div></form><div className="selector-pagination"><LoadMore query={models} label={t('加载更多模型', 'Load more models')} /><LoadMore query={agents} label={t('加载更多代理', 'Load more agents')} /></div><p className="composer-foot">{t('Enter 发送 · Shift + Enter 换行。模型回复可能有误，请核对重要信息。', 'Enter to send · Shift + Enter for a new line. Check important information.')}</p>
+        <form className="composer" onSubmit={send}><textarea id="composer-input" aria-label={t('消息', 'Message')} placeholder={!writable ? t('你只能查看这段对话', 'You can view this conversation only') : t('说说你的想法…', 'What’s on your mind?')} value={draft} onChange={e => updateDraft(e.target.value)} rows={3} maxLength={100000} disabled={!writable} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !composing.current && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} /><div className="composer-toolbar"><div className="composer-selects"><label><span className="sr-only">{t('选择模型', 'Select model')}</span><select value={model} onChange={e => { modelRestoredFor.current = selected; setModel(e.target.value); }} disabled={!!activeRun}><option value="">{t('选择模型', 'Select model')}</option>{modelOptions.map(m => <option value={m.id} key={m.id}>{value(m.data, 'name', value(m.data, 'model'))}</option>)}</select></label>{!!agents.data?.length && <label><span className="sr-only">{t('选择代理', 'Select agent')}</span><select value={agent} onChange={e => selectAgent(e.target.value)} disabled={!!activeRun}><option value="">{t('默认助手', 'Default assistant')}</option>{availableAgents.map(a => <option key={a.id} value={a.id}>{value(a.data, 'name')}</option>)}</select></label>}</div>{activeRun ? <Button type="button" variant="stop" onClick={cancel}><Square size={15} fill="currentColor" />{t('停止', 'Stop')}</Button> : <Button type="submit" variant="primary send" aria-label={t('发送消息', 'Send message')} disabled={!draft.trim() || !modelAvailable || !writable} busy={busy}><ArrowUp size={20} /></Button>}</div></form><div className="selector-pagination"><LoadMore query={models} label={t('加载更多模型', 'Load more models')} /><LoadMore query={agents} label={t('加载更多代理', 'Load more agents')} /></div><p className="composer-foot">{t('Enter 发送 · Shift + Enter 换行。模型回复可能有误，请核对重要信息。', 'Enter to send · Shift + Enter for a new line. Check important information.')}</p>
       </div>
     </div>
     {settings && <Modal title={t('新对话设置', 'New conversation settings')} close={() => setSettings(false)}><div className="stack"><Field label={t('会话名称', 'Conversation title')}><input value={title} onChange={e => setTitle(e.target.value)} /></Field><Field label={t('对助手的说明', 'Instructions for the assistant')}><textarea rows={5} value={system} onChange={e => setSystem(e.target.value)} /></Field><Field label={t('可见范围', 'Visibility')}><select value={visibility} onChange={e => setVisibility(e.target.value)}><option value="private">{t('仅自己', 'Only me')}</option><option value="workspace">{t('工作区成员', 'Workspace members')}</option></select></Field><Button variant="primary" onClick={() => setSettings(false)}>{t('完成', 'Done')}</Button></div></Modal>}
