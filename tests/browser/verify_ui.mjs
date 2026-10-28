@@ -408,6 +408,32 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).last().click();
   });
 
+  await check('deleted knowledge does not return copied source in run or conversation citations', async () => {
+    const document = (await api('GET', `${wp()}/resources/knowledge`)).items.find(item => item.data.title === 'Browser source document');
+    assert.ok(document);
+    await nav('Conversations');
+    await page.getByRole('button', { name: 'New conversation', exact: true }).click();
+    await page.getByLabel('Message', { exact: true }).fill('copper finches');
+    await page.getByRole('button', { name: 'Send message', exact: true }).click();
+    const run = await until(async () => (await api('GET', `${wp()}/resources/runs`)).items.find(item => item.data.status === 'completed' && item.data.citations?.some(citation => citation.document_id === document.id)), 'knowledge chat');
+    const conversation = (await api('GET', `${wp()}/resources/conversations`)).items.find(item => item.data.title === 'copper finches');
+    assert.ok(conversation);
+    assert.equal(run.data.citations.find(citation => citation.document_id === document.id).source_hash, document.data.source_hash);
+    await nav('Knowledge');
+    await page.getByRole('button', { name: 'Delete Browser source document', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete', exact: true }).click();
+    await until(async () => !(await api('GET', `${wp()}/resources/knowledge`)).items.some(item => item.id === document.id), 'source deletion');
+    const [savedRun, messages, results] = await Promise.all([
+      api('GET', `${wp()}/resource/${run.id}`),
+      api('GET', `${wp()}/conversations/${conversation.id}/messages`),
+      api('GET', `${wp()}/knowledge/search?q=copper`),
+    ]);
+    assert.ok(!results.items.some(item => item.document_id === document.id));
+    const citation = messages.items.flatMap(message => message.citations ?? []).find(item => item.document_id === document.id);
+    assert.equal(citation?.source_hash, document.data.source_hash);
+    assert.ok(!JSON.stringify({ savedRun, messages }).includes('Source sentinel: copper finches.'));
+  });
+
   await check('visible pagination reaches conversations beyond 200 resources', async () => {
     await create('conversations', { title: 'Pagination ancient sentinel' });
     await wait(1100);

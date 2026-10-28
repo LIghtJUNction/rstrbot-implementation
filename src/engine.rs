@@ -1,5 +1,5 @@
 //! Durable, bounded conversation runs. Models propose; the core authorizes.
-use crate::state::{ActiveRun, AppError, AppState, sanitize_resource};
+use crate::state::{ActiveRun, AppError, AppState, sanitize_resource, strip_citation_text};
 use axum::http::StatusCode;
 use rstrbot_plugin::{InstanceContext, Manifest, PluginError, RpcEvent};
 use rstrbot_store::{Resource, Role, RunAdmissionRequest, Store, User, Visibility};
@@ -1041,13 +1041,15 @@ impl Execution {
             self.authorize().await?;
             let content = assistant["content"].as_str().unwrap_or_default().to_owned();
             let mut message = tag_provider(assistant, &self.model);
-            message["citations"] = json!(citations);
+            let mut references = json!(citations);
+            strip_citation_text(&mut references);
+            message["citations"] = references.clone();
             append_messages(&self.db, &self.conversation, &self.run.id, vec![message]).await?;
             let saved = mutate_run(&self.db, &self.run.id, |data| {
                 data["content"] = json!(content);
                 data["delivery"] = json!("web_available");
                 data["persistence"] = json!("saved");
-                data["citations"] = json!(citations);
+                data["citations"] = references.clone();
             })
             .await?;
             return Ok(saved.data["cost_microusd"].as_i64());

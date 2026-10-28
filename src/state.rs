@@ -462,9 +462,43 @@ pub fn sanitize_resource(mut resource: Resource) -> Resource {
     sanitize_value(&mut resource.data);
     resource
 }
+
+/// Citations identify a source generation; the retrieved text is transient.
+pub fn strip_citation_text(citations: &mut Value) {
+    if let Some(items) = citations.as_array_mut() {
+        for citation in items {
+            if let Some(fields) = citation.as_object_mut() {
+                fields.remove("text");
+                fields.remove("excerpt");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod citation_tests {
+    use super::*;
+
+    #[test]
+    fn old_nested_citations_are_redacted_without_removing_answers_or_references() {
+        let mut value = json!({"items":[{"content":"answer", "citations":[{
+            "document_id":"doc", "source_hash":"abc", "text":"old source", "excerpt":"old excerpt"
+        }]}]});
+        sanitize_value(&mut value);
+        assert_eq!(value["items"][0]["content"], "answer");
+        assert_eq!(value["items"][0]["citations"][0]["document_id"], "doc");
+        assert_eq!(value["items"][0]["citations"][0]["source_hash"], "abc");
+        assert!(value["items"][0]["citations"][0].get("text").is_none());
+        assert!(value["items"][0]["citations"][0].get("excerpt").is_none());
+    }
+}
+
 pub fn sanitize_value(value: &mut Value) {
     match value {
         Value::Object(map) => {
+            if let Some(citations) = map.get_mut("citations") {
+                strip_citation_text(citations);
+            }
             if map.contains_key("api_key_cipher") {
                 map.insert("has_api_key".into(), json!(true));
             }
