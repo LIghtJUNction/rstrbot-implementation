@@ -209,7 +209,7 @@ Stop the core before local maintenance so the process lock can be acquired:
 ```
 
 The output must be a new file. It contains a consistent database snapshot,
-ownership, run/operation records and budget reservations. Password hashes and
+ownership, run/operation records, budget reservations and text attachments stored in conversation history. Password hashes and
 encrypted credential records make it sensitive. Version 2 snapshots include
 verified email, Google identity and Passkey public-key records, plus encrypted
 authentication settings. Sessions, security challenges, email tokens and mail

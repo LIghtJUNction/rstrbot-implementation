@@ -1,9 +1,13 @@
+import { parseAttachments } from './attachments';
+import type { TextAttachment } from './attachments';
+
 export type ChatIntent = {
   key: string;
   conversationId: string;
   text: string;
   modelId: string;
   agentId: string;
+  attachments?: TextAttachment[];
 };
 
 export type IntentState =
@@ -25,7 +29,9 @@ export function readChatIntent(user: string, workspace: string, conversation: st
     const data: unknown = JSON.parse(raw);
     if (typeof data !== 'object' || data === null || !('key' in data) || !('conversationId' in data) || !('text' in data) || !('modelId' in data) || !('agentId' in data)) return { kind: 'corrupt', raw };
     if (typeof data.key !== 'string' || !data.key || data.conversationId !== conversation || typeof data.text !== 'string' || !data.text || typeof data.modelId !== 'string' || !data.modelId || typeof data.agentId !== 'string') return { kind: 'corrupt', raw };
-    return { kind: 'pending', intent: { key: data.key, conversationId: conversation, text: data.text, modelId: data.modelId, agentId: data.agentId } };
+    const attachments = 'attachments' in data ? parseAttachments(data.attachments) : [];
+    if (!attachments) return { kind: 'corrupt', raw };
+    return { kind: 'pending', intent: { key: data.key, conversationId: conversation, text: data.text, modelId: data.modelId, agentId: data.agentId, ...(attachments.length ? { attachments } : {}) } };
   } catch { return { kind: 'corrupt', raw }; }
 }
 
@@ -58,7 +64,7 @@ export async function clearChatIntent(user: string, workspace: string, conversat
   const result = await withIntentLock(user, workspace, conversation, () => {
     const current = readChatIntent(user, workspace, conversation);
     if (current.kind === 'unavailable') return { kind: 'unavailable' } as const;
-    const same = (expected.kind === 'pending' && current.kind === 'pending' && expected.intent.key === current.intent.key && expected.intent.text === current.intent.text && expected.intent.modelId === current.intent.modelId && expected.intent.agentId === current.intent.agentId) ||
+    const same = (expected.kind === 'pending' && current.kind === 'pending' && expected.intent.key === current.intent.key && expected.intent.text === current.intent.text && expected.intent.modelId === current.intent.modelId && expected.intent.agentId === current.intent.agentId && JSON.stringify(expected.intent.attachments ?? []) === JSON.stringify(current.intent.attachments ?? [])) ||
       (expected.kind === 'corrupt' && current.kind === 'corrupt' && expected.raw === current.raw);
     if (!same) return { kind: 'changed', current } as const;
     try {

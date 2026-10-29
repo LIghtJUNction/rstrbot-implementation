@@ -1,5 +1,6 @@
 use crate::*;
 use futures_util::TryStreamExt;
+use sha2::{Digest, Sha256};
 
 /// Opaque position for a trusted internal scan. It is bound to one resource
 /// kind and retains the first page's upper bound so later inserts cannot keep
@@ -153,7 +154,13 @@ impl Store {
         let history = conversation.data["messages"]
             .as_array_mut()
             .ok_or_else(|| Error::Invalid("conversation history is invalid".into()))?;
-        history.push(serde_json::json!({"id":new_id(),"role":"user","content":request.content,"run_id":run.id,"generation":generation,"created_at":created_at}));
+        let mut message = serde_json::json!({"id":new_id(),"role":"user","content":request.content,"run_id":run.id,"generation":generation,"created_at":created_at});
+        if !request.attachments.is_empty() {
+            message["attachments"] = serde_json::json!(request.attachments.iter().map(|item| serde_json::json!({
+                "name":item.name, "text":item.text, "sha256":format!("{:x}", Sha256::digest(item.text.as_bytes()))
+            })).collect::<Vec<_>>());
+        }
+        history.push(message);
         conversation.data["active_run"] = serde_json::json!(run.id);
         // Record the target in the same transaction as the accepted user turn.
         conversation.data["last_model_id"] = serde_json::json!(model.id);

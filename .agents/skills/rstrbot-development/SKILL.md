@@ -57,3 +57,5 @@ Provider rejection codes `-32041`, `-32043`, and `-32029` have optional 1.0-comp
 1.27 按 RSTRBOT-35 在模型详情读取期间重选当前工作区，验证请求完成、草稿保留及实际发送；继续验证跨工作区离开时不会派发旧请求。
 
 1.28–1.29：投递恢复和工具目录需分别运行 `tests/browser/verify_delivery_ui.mjs`、`tests/plugin_catalog.py` 与 `tests/browser/verify_catalog.mjs`；交互和计划工具权限不放宽，目录超限在模型生成前明确失败。
+
+1.30 按 RSTRBOT-39 验证 UTF-8 文本附件实际模型请求、原文下载、权限、重启和不确定回执恢复；图片、音频和 PDF 仍不是已支持能力。

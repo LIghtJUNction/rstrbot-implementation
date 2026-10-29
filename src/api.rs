@@ -77,6 +77,7 @@ pub fn router(state: AppState, web_dir: PathBuf) -> Router {
             get(resource).patch(update_resource).delete(delete_resource),
         )
         .route("/workspaces/{wid}/chat", post(chat))
+        .route("/workspaces/{wid}/chat/text-attachments", post(chat))
         .route("/workspaces/{wid}/routes/{id}/send", post(send_route))
         .route("/workspaces/{wid}/runs/{id}", get(run))
         .route("/workspaces/{wid}/runs/{id}/cancel", post(cancel_run))
@@ -1239,6 +1240,7 @@ async fn capabilities(
     let mut out = serde_json::Map::new();
     for (name, minimum, available) in [
         ("chat", Role::Member, provider && !recovery),
+        ("text_attachments", Role::Member, provider && !recovery),
         ("knowledge", Role::Viewer, true),
         ("memories", Role::Viewer, true),
         ("schedules", Role::Member, !recovery),
@@ -1252,11 +1254,17 @@ async fn capabilities(
     ] {
         out.insert(name.into(),json!({"supported":true,"authorized":if name=="backup"{user.instance_admin}else{role>=minimum},"available":available,"reason":if recovery&&!available{"Instance is in recovery mode"}else if !available{"Required provider is unavailable"}else{""}}));
     }
+    if let Some(capability) = out.get_mut("text_attachments") {
+        capability["extensions"] = json!([".txt", ".md"]);
+        capability["max_files"] = json!(3);
+        capability["max_file_bytes"] = json!(16_384);
+        capability["max_total_bytes"] = json!(32_768);
+    }
     out.insert("routes".into(),json!({"supported":installed.contains_key("webhook"),"authorized":role>=Role::Member,"available":installed.contains_key("webhook")&&!recovery}));
     for (name, reason) in [
         (
             "attachments",
-            "Attachment upload and media decoding are not implemented in this release",
+            "Images, audio, PDF, binary files and dedicated uploads are not supported; UTF-8 text files are available through chat",
         ),
         (
             "vector_search",

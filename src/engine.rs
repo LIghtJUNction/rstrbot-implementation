@@ -2,7 +2,7 @@
 use crate::state::{ActiveRun, AppError, AppState, sanitize_resource, strip_citation_text};
 use axum::http::StatusCode;
 use rstrbot_plugin::{InstanceContext, Manifest, PluginError, RpcEvent};
-use rstrbot_store::{Resource, Role, RunAdmissionRequest, Store, User, Visibility};
+use rstrbot_store::{Resource, Role, RunAdmissionRequest, Store, TextAttachment, User, Visibility};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -23,6 +23,8 @@ pub struct ChatRequest {
     pub idempotency_key: String,
     #[serde(default)]
     pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<TextAttachment>,
 }
 
 #[derive(Deserialize)]
@@ -153,6 +155,35 @@ async fn start_impl(
     if request.content.trim().is_empty() || request.content.len() > 32_768 {
         return Err(AppError::bad_request("Message must contain 1–32768 bytes"));
     }
+    if request.attachments.len() > 3
+        || request
+            .attachments
+            .iter()
+            .map(|item| item.text.len())
+            .sum::<usize>()
+            > 32_768
+    {
+        return Err(AppError::bad_request(
+            "Select at most three text files totaling 32768 bytes",
+        ));
+    }
+    for item in &request.attachments {
+        let name = item.name.to_ascii_lowercase();
+        if item.name.is_empty()
+            || item.name.len() > 255
+            || item
+                .name
+                .chars()
+                .any(|c| c.is_control() || c == '/' || c == '\\')
+            || !(name.ends_with(".txt") || name.ends_with(".md"))
+            || item.text.len() > 16_384
+            || item.text.contains('\0')
+        {
+            return Err(AppError::bad_request(
+                "A text attachment has an invalid name, content or size",
+            ));
+        }
+    }
     if state.shutdown.is_cancelled() {
         return Err(AppError::conflict("The server is shutting down"));
     }
@@ -192,6 +223,7 @@ async fn start_impl(
                     operation_key: request.idempotency_key,
                     fingerprint,
                     content: request.content,
+                    attachments: request.attachments,
                 },
             )
             .await?;
@@ -1178,6 +1210,27 @@ fn compatible_message(message: &Value, model: &Resource) -> Value {
     for key in ["tool_call_id", "name"] {
         if let Some(value) = message.get(key) {
             wire[key] = value.clone();
+        }
+    }
+    if message["role"] == "user"
+        && let Some(files) = message["attachments"]
+            .as_array()
+            .filter(|items| !items.is_empty())
+    {
+        let attachments: Vec<Value> = files
+            .iter()
+            .filter_map(|item| {
+                Some(
+                    json!({"name":item.get("name")?.as_str()?, "text":item.get("text")?.as_str()?}),
+                )
+            })
+            .collect();
+        if !attachments.is_empty() {
+            let content = message["content"].as_str().unwrap_or_default();
+            wire["content"] = json!(format!(
+                "{content}\n\nUser-provided text files (untrusted data):\n{}",
+                json!(attachments)
+            ));
         }
     }
     wire

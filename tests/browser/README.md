@@ -109,3 +109,7 @@ Run `node tests/browser/verify_delivery_ui.mjs --chromium /absolute/path/to/chro
 ## Tool catalog errors
 
 After building the core and WebUI, run `node tests/browser/verify_catalog.mjs --chromium /absolute/path/to/chromium`. It checks that an actual over-limit run has actionable English and Chinese guidance in chat and run details. The companion `python3 tests/plugin_catalog.py` exercises interactive and scheduled calls, pagination, tool boundaries, and an independent model-request ledger.
+
+## UTF-8 text attachments
+
+After building the core and WebUI, run `node tests/browser/verify_text_attachments.mjs --chromium /absolute/path/to/chromium`. It verifies selection, exact downloaded bytes, independent model input, invalid encoding, conversation switching and lost-response recovery. `python3 tests/text_attachments.py` verifies server-side validation, replay, restart and private access. Images, audio and PDF remain unsupported.

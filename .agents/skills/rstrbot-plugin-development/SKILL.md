@@ -34,3 +34,5 @@ For a full local check, use `mise exec -- ./scripts/check.sh`. An unavailable ru
 Provider rejection codes `-32041`, `-32043`, and `-32029` have optional 1.0-compatible behavior documented in `docs/PLUGIN_PROTOCOL.md`. Preserve generic fallback for old workers/hosts, do not reveal response bodies, and test each SDK runtime separately. The source lives in the pinned implementation submodule; it is not part of the recipe payload.
 
 Tool discovery is scoped to the current member and workspace. Test interactive and scheduled runs with more than 100 plugin instances, the 32-tool per-plugin and 64-tool per-run boundaries, and permission revocation; discovery does not grant execution authority. Run `python3 tests/plugin_catalog.py` from the implementation root.
+
+For text attachments, verify that model workers receive the complete user-supplied text as untrusted content, keep the original message and filename, and never imply that text support adds image, audio, or PDF support. Run `python3 tests/text_attachments.py` against a loopback model receiver.

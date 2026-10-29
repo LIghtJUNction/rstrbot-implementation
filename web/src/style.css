@@ -740,3 +740,8 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 .source-buttons { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .source-buttons .button { max-width: 100%; font-size: 12px; min-height: 36px; padding: 6px 9px; white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .source-document mark { background: var(--accent); color: var(--accent-text); border-radius: 3px; }
+
+.text-attachments { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-bottom: 8px; }
+.attachment-picker { cursor: pointer; }
+.attachment-picker:focus-within { outline: 2px solid currentColor; outline-offset: 2px; }
+.attachment-item { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; overflow-wrap: anywhere; }

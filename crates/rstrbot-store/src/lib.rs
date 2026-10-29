@@ -162,6 +162,14 @@ pub struct RunAdmissionRequest {
     pub operation_key: String,
     pub fingerprint: String,
     pub content: String,
+    pub attachments: Vec<TextAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextAttachment {
+    pub name: String,
+    pub text: String,
 }
 
 pub struct RunAdmission {
