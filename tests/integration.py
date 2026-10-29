@@ -299,8 +299,27 @@ def exercise(options, report):
             after = bob.get(base + f"/conversations/{bob_private['id']}/messages")
             assert before == after, {"messages_before_retry":before,"messages_after_retry":after}
             body["content"] = "changed intention"
+            runs_before_conflict = {run["id"] for run in bob.get(base + "/resources/runs")["items"]}
+            messages_before_conflict = bob.get(base + f"/conversations/{bob_private['id']}/messages")
+            events_before_conflict = bob.get(base + "/events?limit=500")["items"]
             bob.post(base + "/chat",body,expect=(409,))
+            runs_after_conflict = {run["id"] for run in bob.get(base + "/resources/runs")["items"]}
+            messages_after_conflict = bob.get(base + f"/conversations/{bob_private['id']}/messages")
+            events_after_conflict = bob.get(base + "/events?limit=500")["items"]
+            assert runs_after_conflict == runs_before_conflict, {
+                "runs_before_conflict":runs_before_conflict,
+                "runs_after_conflict":runs_after_conflict,
+            }
+            assert messages_after_conflict == messages_before_conflict, {
+                "messages_before_conflict":messages_before_conflict,
+                "messages_after_conflict":messages_after_conflict,
+            }
+            assert events_after_conflict == events_before_conflict, {
+                "events_before_conflict":events_before_conflict,
+                "events_after_conflict":events_after_conflict,
+            }
             report["checks"].append("real provider/tool subprocess loop, stream events, persisted tool result and stable request idempotency")
+            report["checks"].append("same idempotency key with changed body returns 409 without a second run, message mutation or event")
 
             in_flight, in_flight_body = send(bob,bob_private,model,"/diagnostic/wait")
             wait_for(lambda:bob.get(base + "/runs/" + in_flight["run"]["id"]),lambda r:r["data"]["stage"]=="model")
