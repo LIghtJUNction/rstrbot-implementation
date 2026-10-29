@@ -641,70 +641,115 @@ impl Execution {
 
     async fn discover_tools(&self) -> Result<Vec<Tool>, AppError> {
         let mut tools = Vec::new();
-        for instance in self
-            .db
-            .list_resources(&self.run.workspace_id, &self.user.id, "plugins", 100, 0)
-            .await?
-        {
-            // A tool can return its instance's private configuration or data.
-            // Read-only describes effects, not permission to share its output.
-            if instance.data["enabled"] != true
-                || (self.conversation.visibility == Visibility::Workspace
-                    && instance.visibility != Visibility::Workspace)
-            {
-                continue;
-            }
-            let package_id = instance.data["package_id"].as_str().unwrap_or_default();
-            let Some(manifest) = self.state.packages.read().await.get(package_id).cloned() else {
-                continue;
-            };
-            if !manifest
-                .capabilities
-                .iter()
-                .any(|capability| capability == "tools")
-            {
-                continue;
-            }
-            if let Some(active) = self.state.runs.lock().await.get_mut(&self.run.id) {
-                active.plugin_ids.push(instance.id.clone());
-            }
-            let result = self
-                .call(
-                    &manifest,
-                    &instance_context(&instance),
-                    "tools.list",
-                    json!({"config":instance.data["config"]}),
-                    Some(&instance),
-                    false,
+        let mut cursor = None;
+        let mut scanned = 0usize;
+        loop {
+            let page = self
+                .db
+                .visible_resource_page(
+                    &self.run.workspace_id,
+                    &self.user.id,
+                    "plugins",
+                    cursor.as_ref(),
+                    100,
                 )
-                .await?
-                .value;
-            for tool in result["tools"].as_array().into_iter().flatten().take(32) {
-                // Write tools require a separate concrete approval protocol. Until
-                // then they are excluded instead of being implicitly authorized.
-                if tool["effect"] != "read_only" {
+                .await?;
+            for instance in page.items {
+                scanned += 1;
+                if scanned > 10_000 {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "tool_catalog_instance_limit",
+                        "Too many plugin instances to discover safely; remove unused instances and try again",
+                    ));
+                }
+                // A tool can return its instance's private configuration or data.
+                // Read-only describes effects, not permission to share its output.
+                if instance.data["enabled"] != true
+                    || (self.conversation.visibility == Visibility::Workspace
+                        && instance.visibility != Visibility::Workspace)
+                {
                     continue;
                 }
-                let Some(name) = tool["name"].as_str().filter(|name| {
-                    !name.is_empty()
-                        && name.len() <= 48
-                        && name.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
-                        })
-                }) else {
-                    continue;
+                let package_id = instance.data["package_id"].as_str().unwrap_or_default();
+                let Some(manifest) = self.state.packages.read().await.get(package_id).cloned()
+                else {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "tool_catalog_package_unavailable",
+                        "An enabled plugin package is unavailable; reinstall it or disable its instance",
+                    ));
                 };
-                let alias = format!("p_{}_{}", &instance.id[..8.min(instance.id.len())], name);
-                let schema = json!({"type":"function","function":{"name":alias,"description":tool["description"],"parameters":tool["input_schema"]}});
-                tools.push(Tool {
-                    name: name.to_owned(),
-                    instance: instance.clone(),
-                    manifest: manifest.clone(),
-                    schema,
-                });
-                if tools.len() >= 64 {
-                    return Ok(tools);
+                if !manifest
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "tools")
+                {
+                    continue;
                 }
+                if let Some(active) = self.state.runs.lock().await.get_mut(&self.run.id) {
+                    active.plugin_ids.push(instance.id.clone());
+                }
+                let result = self
+                    .call(
+                        &manifest,
+                        &instance_context(&instance),
+                        "tools.list",
+                        json!({"config":instance.data["config"]}),
+                        Some(&instance),
+                        false,
+                    )
+                    .await?
+                    .value;
+                let declared = result["tools"].as_array().ok_or_else(|| {
+                    AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "tool_catalog_invalid",
+                        "A plugin returned an invalid tool list; check its configuration",
+                    )
+                })?;
+                if declared.len() > 32 {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "tool_catalog_plugin_limit",
+                        "A plugin declares more than 32 tools; reduce its tool list and try again",
+                    ));
+                }
+                for tool in declared {
+                    // Write tools require a separate concrete approval protocol. Until
+                    // then they are excluded instead of being implicitly authorized.
+                    if tool["effect"] != "read_only" {
+                        continue;
+                    }
+                    let Some(name) = tool["name"].as_str().filter(|name| {
+                        !name.is_empty()
+                            && name.len() <= 48
+                            && name.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
+                            })
+                    }) else {
+                        continue;
+                    };
+                    let alias = format!("p_{}_{}", &instance.id[..8.min(instance.id.len())], name);
+                    let schema = json!({"type":"function","function":{"name":alias,"description":tool["description"],"parameters":tool["input_schema"]}});
+                    if tools.len() == 64 {
+                        return Err(AppError::new(
+                            StatusCode::BAD_REQUEST,
+                            "tool_catalog_tool_limit",
+                            "More than 64 tools are available; disable unused tool instances and try again",
+                        ));
+                    }
+                    tools.push(Tool {
+                        name: name.to_owned(),
+                        instance: instance.clone(),
+                        manifest: manifest.clone(),
+                        schema,
+                    });
+                }
+            }
+            cursor = page.next;
+            if cursor.is_none() {
+                break;
             }
         }
         Ok(tools)
@@ -1580,10 +1625,10 @@ async fn authorize_model_discovery(
             "Recovery mode prevents provider discovery",
         ));
     }
-    if allow_private_network {
-        if !current_user.instance_admin || !state.config.read().await.allow_private_network {
-            return Err(AppError::forbidden());
-        }
+    if allow_private_network
+        && (!current_user.instance_admin || !state.config.read().await.allow_private_network)
+    {
+        return Err(AppError::forbidden());
     }
     if let Some(saved_model) = saved_model {
         let current = db.get_resource(workspace, user_id, &saved_model.id).await?;

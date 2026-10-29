@@ -32,3 +32,5 @@ python3 tests/plugin_conformance.py --sdk <rust|python|typescript|csharp>
 For a full local check, use `mise exec -- ./scripts/check.sh`. An unavailable runtime is `not_executed`, not a pass. Update the protocol document, SDK README, and conformance vectors together when changing shared behavior.
 
 Provider rejection codes `-32041`, `-32043`, and `-32029` have optional 1.0-compatible behavior documented in `docs/PLUGIN_PROTOCOL.md`. Preserve generic fallback for old workers/hosts, do not reveal response bodies, and test each SDK runtime separately. The source lives in the pinned implementation submodule; it is not part of the recipe payload.
+
+Tool discovery is scoped to the current member and workspace. Test interactive and scheduled runs with more than 100 plugin instances, the 32-tool per-plugin and 64-tool per-run boundaries, and permission revocation; discovery does not grant execution authority. Run `python3 tests/plugin_catalog.py` from the implementation root.

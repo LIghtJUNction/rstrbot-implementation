@@ -105,3 +105,7 @@ The chat-recovery checks also exercise two concurrent tabs, a stale confirmation
 ## Delivery recovery
 
 Run `node tests/browser/verify_delivery_ui.mjs --chromium /absolute/path/to/chromium` after building the WebUI and binaries. It creates a temporary core and loopback HTTP receiver, drops acknowledgements, and counts received requests while exercising explicit recovery, multiple tabs, reload, legacy session state, storage refusal and unavailable browser locks. The receiver is a fixture; this does not establish delivery across devices or after browser data is cleared.
+
+## Tool catalog errors
+
+After building the core and WebUI, run `node tests/browser/verify_catalog.mjs --chromium /absolute/path/to/chromium`. It checks that an actual over-limit run has actionable English and Chinese guidance in chat and run details. The companion `python3 tests/plugin_catalog.py` exercises interactive and scheduled calls, pagination, tool boundaries, and an independent model-request ledger.

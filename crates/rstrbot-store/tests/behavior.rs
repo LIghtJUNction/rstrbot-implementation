@@ -47,6 +47,117 @@ async fn initialized() -> (Store, User, String, Option<tempfile::TempDir>) {
 }
 
 #[tokio::test]
+async fn visible_cursor_keeps_scope_and_membership_during_pages() {
+    let (store, alice, workspace, _dir) = initialized().await;
+    let bob = store.create_user(&alice, "bob", PASSWORD).await.unwrap();
+    store
+        .set_member(&workspace, &alice.id, &bob.id, Role::Member)
+        .await
+        .unwrap();
+    let mut shared = Vec::new();
+    for index in 0..5 {
+        shared.push(
+            store
+                .create_resource(
+                    &workspace,
+                    &alice.id,
+                    "conversations",
+                    Visibility::Workspace,
+                    json!({"index":index}),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let secret = store
+        .create_resource(
+            &workspace,
+            &alice.id,
+            "conversations",
+            Visibility::Private,
+            json!({"private":true}),
+        )
+        .await
+        .unwrap();
+    let own = store
+        .create_resource(
+            &workspace,
+            &bob.id,
+            "conversations",
+            Visibility::Private,
+            json!({"private":true}),
+        )
+        .await
+        .unwrap();
+    let first = store
+        .visible_resource_page(&workspace, &bob.id, "conversations", None, 2)
+        .await
+        .unwrap();
+    let cursor = first.next.unwrap();
+    assert!(matches!(
+        store
+            .visible_resource_page(&workspace, &alice.id, "conversations", Some(&cursor), 2)
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        store
+            .visible_resource_page(&workspace, &bob.id, "runs", Some(&cursor), 2)
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    let mut seen: Vec<_> = first.items.iter().map(|item| item.id.clone()).collect();
+    let already_read = first
+        .items
+        .iter()
+        .find(|item| item.owner_id == alice.id)
+        .unwrap();
+    store
+        .delete_resource(
+            &workspace,
+            &alice.id,
+            &already_read.id,
+            already_read.version,
+        )
+        .await
+        .unwrap();
+    let mut next = Some(cursor);
+    while let Some(current) = next {
+        let page = store
+            .visible_resource_page(&workspace, &bob.id, "conversations", Some(&current), 2)
+            .await
+            .unwrap();
+        seen.extend(page.items.into_iter().map(|item| item.id));
+        next = page.next;
+    }
+    seen.sort();
+    let mut expected: Vec<_> = shared
+        .into_iter()
+        .map(|item| item.id)
+        .chain([own.id])
+        .collect();
+    expected.sort();
+    assert_eq!(seen, expected);
+    assert!(!seen.contains(&secret.id));
+    let cursor = store
+        .visible_resource_page(&workspace, &bob.id, "conversations", None, 2)
+        .await
+        .unwrap()
+        .next
+        .unwrap();
+    store
+        .remove_member(&workspace, &alice.id, &bob.id)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .visible_resource_page(&workspace, &bob.id, "conversations", Some(&cursor), 2)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn recovery_scan_traverses_more_than_ten_thousand_records_in_bounded_pages() {
     let (store, _directory, url) = database_with_url().await;
     let owner = store

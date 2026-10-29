@@ -55,3 +55,5 @@ Provider rejection codes `-32041`, `-32043`, and `-32029` have optional 1.0-comp
 1.26 按 RSTRBOT-34 验证中断计划的显式核对、原子事件和独立恢复，核对不等于确认外部结果，也不得重放旧意图。
 
 1.27 按 RSTRBOT-35 在模型详情读取期间重选当前工作区，验证请求完成、草稿保留及实际发送；继续验证跨工作区离开时不会派发旧请求。
+
+1.28–1.29：投递恢复和工具目录需分别运行 `tests/browser/verify_delivery_ui.mjs`、`tests/plugin_catalog.py` 与 `tests/browser/verify_catalog.mjs`；交互和计划工具权限不放宽，目录超限在模型生成前明确失败。

@@ -19,6 +19,22 @@ pub struct ResourcePage {
     pub next: Option<ResourceCursor>,
 }
 
+/// Position in a resource scan bound to the caller and workspace.
+#[derive(Debug, Clone)]
+pub struct VisibleResourceCursor {
+    workspace: String,
+    user: String,
+    kind: String,
+    after: (i64, String),
+    through: (i64, String),
+}
+
+#[derive(Debug)]
+pub struct VisibleResourcePage {
+    pub items: Vec<Resource>,
+    pub next: Option<VisibleResourceCursor>,
+}
+
 const RESOURCE_PAGE_BYTES: usize = 16 * 1024 * 1024;
 
 impl Store {
@@ -254,6 +270,82 @@ impl Store {
         let rows = sqlx::query("SELECT r.* FROM resources r JOIN members m ON m.workspace_id = r.workspace_id AND m.user_id = $2 JOIN users u ON u.id = m.user_id AND u.disabled = 0 WHERE r.workspace_id = $1 AND r.kind = $3 AND (r.visibility = 'workspace' OR r.owner_id = $2) ORDER BY r.created_at DESC, r.id DESC LIMIT $4 OFFSET $5")
             .bind(workspace).bind(user).bind(kind).bind(limit.clamp(1, 500)).bind(offset.clamp(0, 10_000_000)).fetch_all(&self.pool).await?;
         rows.iter().map(resource_from_row).collect()
+    }
+
+    /// Scan resources visible to one current member without offset shifts.
+    /// This is bounded by the first page's upper key, not a snapshot: a
+    /// concurrent insertion behind the cursor can wait for the next scan.
+    pub async fn visible_resource_page(
+        &self,
+        workspace: &str,
+        user: &str,
+        kind: &str,
+        cursor: Option<&VisibleResourceCursor>,
+        limit: i64,
+    ) -> Result<VisibleResourcePage> {
+        self.membership(workspace, user).await?;
+        checked_label(kind, "resource kind", 64)?;
+        if cursor.is_some_and(|c| c.workspace != workspace || c.user != user || c.kind != kind) {
+            return Err(Error::Invalid(
+                "resource cursor belongs to a different scope".into(),
+            ));
+        }
+        let through = match cursor {
+            Some(c) => c.through.clone(),
+            None => {
+                let row = sqlx::query("SELECT r.created_at, r.id FROM resources r JOIN members m ON m.workspace_id = r.workspace_id AND m.user_id = $2 JOIN users u ON u.id = m.user_id AND u.disabled = 0 WHERE r.workspace_id = $1 AND r.kind = $3 AND (r.visibility = 'workspace' OR r.owner_id = $2) ORDER BY r.created_at DESC, r.id DESC LIMIT 1")
+                    .bind(workspace).bind(user).bind(kind).fetch_optional(&self.pool).await?;
+                let Some(row) = row else {
+                    return Ok(VisibleResourcePage {
+                        items: Vec::new(),
+                        next: None,
+                    });
+                };
+                (row.try_get("created_at")?, row.try_get("id")?)
+            }
+        };
+        let limit = limit.clamp(1, 500);
+        let sql = if cursor.is_some() {
+            "SELECT r.* FROM resources r JOIN members m ON m.workspace_id = r.workspace_id AND m.user_id = $2 JOIN users u ON u.id = m.user_id AND u.disabled = 0 WHERE r.workspace_id = $1 AND r.kind = $3 AND (r.visibility = 'workspace' OR r.owner_id = $2) AND (r.created_at < $4 OR (r.created_at = $4 AND r.id <= $5)) AND (r.created_at > $6 OR (r.created_at = $6 AND r.id > $7)) ORDER BY r.created_at, r.id LIMIT $8"
+        } else {
+            "SELECT r.* FROM resources r JOIN members m ON m.workspace_id = r.workspace_id AND m.user_id = $2 JOIN users u ON u.id = m.user_id AND u.disabled = 0 WHERE r.workspace_id = $1 AND r.kind = $3 AND (r.visibility = 'workspace' OR r.owner_id = $2) AND (r.created_at < $4 OR (r.created_at = $4 AND r.id <= $5)) ORDER BY r.created_at, r.id LIMIT $6"
+        };
+        let mut query = sqlx::query(sql)
+            .bind(workspace)
+            .bind(user)
+            .bind(kind)
+            .bind(through.0)
+            .bind(&through.1);
+        if let Some(c) = cursor {
+            query = query.bind(c.after.0).bind(&c.after.1);
+        }
+        let mut rows = query.bind(limit).fetch(&self.pool);
+        let mut items = Vec::new();
+        let mut bytes = 0usize;
+        let mut byte_limited = false;
+        while let Some(row) = rows.try_next().await? {
+            let encoded: String = row.try_get("data")?;
+            let size = encoded.len();
+            if !items.is_empty() && size > RESOURCE_PAGE_BYTES.saturating_sub(bytes) {
+                byte_limited = true;
+                break;
+            }
+            bytes = bytes.saturating_add(size);
+            items.push(resource_from_row(&row)?);
+        }
+        drop(rows);
+        let next = if byte_limited || items.len() == limit as usize {
+            items.last().map(|last| VisibleResourceCursor {
+                workspace: workspace.to_owned(),
+                user: user.to_owned(),
+                kind: kind.to_owned(),
+                after: (last.created_at, last.id.clone()),
+                through,
+            })
+        } else {
+            None
+        };
+        Ok(VisibleResourcePage { items, next })
     }
 
     pub async fn update_resource(

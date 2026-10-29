@@ -475,24 +475,6 @@ pub fn strip_citation_text(citations: &mut Value) {
     }
 }
 
-#[cfg(test)]
-mod citation_tests {
-    use super::*;
-
-    #[test]
-    fn old_nested_citations_are_redacted_without_removing_answers_or_references() {
-        let mut value = json!({"items":[{"content":"answer", "citations":[{
-            "document_id":"doc", "source_hash":"abc", "text":"old source", "excerpt":"old excerpt"
-        }]}]});
-        sanitize_value(&mut value);
-        assert_eq!(value["items"][0]["content"], "answer");
-        assert_eq!(value["items"][0]["citations"][0]["document_id"], "doc");
-        assert_eq!(value["items"][0]["citations"][0]["source_hash"], "abc");
-        assert!(value["items"][0]["citations"][0].get("text").is_none());
-        assert!(value["items"][0]["citations"][0].get("excerpt").is_none());
-    }
-}
-
 pub fn sanitize_value(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -872,5 +854,23 @@ pub async fn prepare_data(
         _ => Err(AppError::bad_request(
             "Resource type is read-only or unsupported",
         )),
+    }
+}
+
+#[cfg(test)]
+mod citation_tests {
+    use super::*;
+
+    #[test]
+    fn old_nested_citations_are_redacted_without_removing_answers_or_references() {
+        let mut value = json!({"items":[{"content":"answer", "citations":[{
+            "document_id":"doc", "source_hash":"abc", "text":"old source", "excerpt":"old excerpt"
+        }]}]});
+        sanitize_value(&mut value);
+        assert_eq!(value["items"][0]["content"], "answer");
+        assert_eq!(value["items"][0]["citations"][0]["document_id"], "doc");
+        assert_eq!(value["items"][0]["citations"][0]["source_hash"], "abc");
+        assert!(value["items"][0]["citations"][0].get("text").is_none());
+        assert!(value["items"][0]["citations"][0].get("excerpt").is_none());
     }
 }

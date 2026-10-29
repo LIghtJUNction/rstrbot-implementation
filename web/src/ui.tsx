@@ -10,6 +10,18 @@ export function useText() {
   return { language, t: (zh: string, en: string) => language === 'zh' ? zh : en };
 }
 
+export function catalogErrorMessage(code: string, language: Language): string | undefined {
+  const messages: Record<string, [string, string]> = {
+    tool_catalog_instance_limit: ['插件实例太多，无法完整检查。请移除不再使用的实例后重试。', 'Too many plugin instances to inspect safely. Remove unused instances and try again.'],
+    tool_catalog_package_unavailable: ['启用的插件包不可用。请重新安装插件，或停用对应实例。', 'An enabled plugin package is unavailable. Reinstall it or disable its instance.'],
+    tool_catalog_invalid: ['插件返回的工具列表无效。请检查插件配置。', 'A plugin returned an invalid tool list. Check its configuration.'],
+    tool_catalog_plugin_limit: ['一个插件声明了超过 32 个工具。请精简该插件的工具列表。', 'A plugin declares more than 32 tools. Reduce its tool list.'],
+    tool_catalog_tool_limit: ['可用工具超过 64 个。请停用不需要的工具实例后重试。', 'More than 64 tools are available. Disable unused tool instances and try again.'],
+  };
+  const message = messages[code];
+  return message?.[language === 'zh' ? 0 : 1];
+}
+
 export function Button({ children, className = '', busy, variant = '', ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; variant?: string }) {
   return <button {...rest} disabled={rest.disabled || busy} className={`button ${variant} ${className}`}>
     {busy && <LoaderCircle size={16} className="spin" aria-hidden="true" />}{children}
@@ -21,8 +33,12 @@ export function Brand({ small = false }: { small?: boolean }) {
 }
 
 export function ErrorNotice({ error, onRetry, draftPreserved, onReview, onConfigureModels }: { error: unknown; onRetry?: () => void; draftPreserved?: boolean; onReview?: () => void; onConfigureModels?: () => void }) {
-  const { t } = useText();
+  const { t, language } = useText();
   if (!error) return null;
+  if (error instanceof ApiError) {
+    const message = catalogErrorMessage(error.code, language);
+    if (message) return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{message}</p></div>;
+  }
   if (error instanceof ApiError && error.code === 'schedule_future_time_required') return <div className="notice error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{t('请先编辑任务，将执行时间改为未来时间，再启用。', 'Edit the schedule to a future time before enabling it.')}</p></div>;
   if (error instanceof ApiError && error.code === 'knowledge_index_inconsistent') {
     const names = error.message.startsWith('Knowledge index inconsistent: ') ? error.message.slice('Knowledge index inconsistent: '.length) : '';

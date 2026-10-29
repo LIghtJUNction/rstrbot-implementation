@@ -23,7 +23,7 @@ pub use identity::{
     AuthAccount, AuthChallenge, GoogleIdentity, IdentitySetting, PasskeyCredential, VerifiedEmail,
 };
 pub use probe::Probe;
-pub use resources::{ResourceCursor, ResourcePage};
+pub use resources::{ResourceCursor, ResourcePage, VisibleResourceCursor, VisibleResourcePage};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
