@@ -76,11 +76,12 @@ def exercise(binary, report):
                 label = f"stream-{index}"
                 conversation = client.post(base + "/resources/conversations", {
                     "visibility": "private", "data": {"title": label}})
+                key = str(uuid.uuid4())
                 admitted = client.post(base + "/chat", {"conversation_id": conversation["id"],
-                    "model_id": model["id"], "content": label, "idempotency_key": str(uuid.uuid4())})
-                runs.append((label, conversation["id"], admitted["run"]["id"]))
+                    "model_id": model["id"], "content": label, "idempotency_key": key})
+                runs.append((label, conversation["id"], admitted["run"]["id"], key))
             completed = []
-            for label, conversation, run_id in runs:
+            for label, conversation, run_id, _key in runs:
                 run = wait_for(lambda: client.get(base + "/runs/" + run_id),
                                lambda value: value["data"]["status"] in TERMINAL)
                 expected = "".join(f"{label}:{index:02d}|" for index in range(50))
@@ -107,6 +108,20 @@ def exercise(binary, report):
             with Provider.lock:
                 assert Provider.requests == 3, Provider.requests
             report["checks"].append("core restart preserves identical durable fragments and final receipts without another provider request")
+
+            label, conversation_id, _run_id, key = runs[0]
+            runs_before_conflict = {run["id"] for run in client.get(base + "/resources/runs")["items"]}
+            messages_before_conflict = client.get(base + f"/conversations/{conversation_id}/messages")
+            events_before_conflict = client.get(base + "/events?limit=500")["items"]
+            client.post(base + "/chat", {"conversation_id": conversation_id,
+                        "model_id": model["id"], "content": label + ":changed",
+                        "idempotency_key": key}, expect=(409,))
+            assert {run["id"] for run in client.get(base + "/resources/runs")["items"]} == runs_before_conflict
+            assert client.get(base + f"/conversations/{conversation_id}/messages") == messages_before_conflict
+            assert client.get(base + "/events?limit=500")["items"] == events_before_conflict
+            with Provider.lock:
+                assert Provider.requests == 3, Provider.requests
+            report["checks"].append("after the accepted HTTP/SSE call, changed-body key conflict returns 409 with no new provider request, run, message or event")
     finally:
         if instance:
             instance.stop()
