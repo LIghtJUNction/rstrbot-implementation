@@ -182,3 +182,5 @@ Text attachments accept up to three UTF-8 .txt/.md names and original text, 16,3
 The capabilities response reports `text_attachments` with supported/authorized/available, extensions and byte/file limits; generic `attachments` remains unsupported for images, audio, PDF, binary files and dedicated uploads.
 
 `POST /workspaces/:wid/chat/text-attachments` follows the same chat schema and authorization; clients with files use this distinct route so older cores return 404 rather than silently ignoring unknown attachment fields. Never fall back to plain chat automatically.
+
+Both chat routes reject unknown top-level and attachment fields with HTTP 422 before admitting a run. This intentionally changes older versions that ignored extra chat fields: clients must remove unsupported fields instead of relying on them being silently discarded. Documented text requests remain valid; images remain unsupported.

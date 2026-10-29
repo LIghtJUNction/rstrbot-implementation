@@ -4,7 +4,7 @@
   "info": {
     "title": "RstrBot HTTP API",
     "version": "0.2.0",
-    "description": "Contract for actually registered release routes. All paths are absolute from the server origin. Current JSON success bodies use HTTP 200; documented no-content operations use 204. Browser authentication uses an HttpOnly SameSite=Strict cookie; non-browser callers may use the same opaque session token as Bearer (not a separately scoped API key). Authorization headers override cookies. Every API mutation without a Bearer-prefixed Authorization requires X-RstrBot-Request: 1, including setup/login. Cross-site Sec-Fetch-Site and mismatched Origin are rejected even with Bearer. No credentialed CORS is provided. The Google callback has its own single-use state/browser binding validation before exchanging a code. JSON bodies are limited to 1 MiB; UTF-8 byte limits are described with x-max-utf8-bytes. Unknown top-level fields are rejected only where the Rust request type declares deny_unknown_fields; generic data and ChatRequest are intentionally described separately. Examples are illustrative test data, not execution evidence. Unsupported capabilities have no invented endpoints.",
+    "description": "Contract for actually registered release routes. All paths are absolute from the server origin. Current JSON success bodies use HTTP 200; documented no-content operations use 204. Browser authentication uses an HttpOnly SameSite=Strict cookie; non-browser callers may use the same opaque session token as Bearer (not a separately scoped API key). Authorization headers override cookies. Every API mutation without a Bearer-prefixed Authorization requires X-RstrBot-Request: 1, including setup/login. Cross-site Sec-Fetch-Site and mismatched Origin are rejected even with Bearer. No credentialed CORS is provided. The Google callback has its own single-use state/browser binding validation before exchanging a code. JSON bodies are limited to 1 MiB; UTF-8 byte limits are described with x-max-utf8-bytes. Unknown top-level fields are rejected only where the Rust request type declares deny_unknown_fields; generic data and ChatRequest are described separately. Examples are illustrative test data, not execution evidence. Unsupported capabilities have no invented endpoints.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -3489,6 +3489,113 @@
         }
       }
     },
+    "/api/v1/workspaces/{wid}/chat/text-attachments": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "post": {
+        "operationId": "chat_with_text_attachments",
+        "summary": "Accept a conversation run with UTF-8 text attachments",
+        "description": "Use this route for text attachments so older cores reject the request instead of silently ignoring unrecognized attachment fields. It follows the same access, idempotency and execution rules as chat.",
+        "tags": [
+          "Execution"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "402": {
+            "$ref": "#/components/responses/Error402"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error502"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          },
+          "default": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        },
+        "x-handler": "src/api.rs::chat",
+        "x-csrf": "Required even for public setup/login unless Authorization starts with Bearer; cross-site/origin checks also apply to bearer requests.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "UTF-8 JSON, maximum total body 1 MiB. Byte-length limits are annotated separately from JSON Schema character counts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              },
+              "examples": {
+                "message": {
+                  "summary": "Illustrative, no real credentials or IDs",
+                  "value": {
+                    "conversation_id": "33333333-3333-4333-8333-333333333333",
+                    "model_id": "44444444-4444-4444-8444-444444444444",
+                    "content": "Summarize my authorized notes.",
+                    "idempotency_key": "example-chat-intent-001"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{wid}/routes/{id}/send": {
       "parameters": [
         {
@@ -4464,34 +4571,9 @@
             "csrfHeader": []
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "version",
-                  "acknowledge"
-                ],
-                "properties": {
-                  "version": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
-                  "acknowledge": {
-                    "const": true,
-                    "type": "boolean"
-                  }
-                }
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
-            "description": "Reviewed, paused schedule",
+            "description": "Request succeeded.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4515,8 +4597,44 @@
           "409": {
             "$ref": "#/components/responses/Error409"
           },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          },
+          "default": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        },
+        "x-handler": "src/api.rs::reconcile_schedule",
+        "x-csrf": "Required even for public setup/login unless Authorization starts with Bearer; cross-site/origin checks also apply to bearer requests.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Origin"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "UTF-8 JSON, maximum total body 1 MiB. Byte-length limits are annotated separately from JSON Schema character counts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileScheduleInput"
+              }
+            }
           }
         }
       }
@@ -5009,113 +5127,6 @@
           }
         },
         "x-handler": "src/api.rs::ready"
-      }
-    },
-    "/api/v1/workspaces/{wid}/chat/text-attachments": {
-      "parameters": [
-        {
-          "$ref": "#/components/parameters/WorkspaceId"
-        }
-      ],
-      "post": {
-        "operationId": "chat_with_text_attachments",
-        "summary": "Accept a conversation run with UTF-8 text attachments",
-        "description": "Use this route for text attachments so older cores reject the request instead of silently ignoring unrecognized attachment fields. It follows the same access, idempotency and execution rules as chat.",
-        "tags": [
-          "Execution"
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "sessionCookie": [],
-            "csrfHeader": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Request succeeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatAccepted"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error400"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error401"
-          },
-          "402": {
-            "$ref": "#/components/responses/Error402"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error403"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error404"
-          },
-          "409": {
-            "$ref": "#/components/responses/Error409"
-          },
-          "413": {
-            "$ref": "#/components/responses/Error413"
-          },
-          "415": {
-            "$ref": "#/components/responses/Error415"
-          },
-          "422": {
-            "$ref": "#/components/responses/Error422"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error429"
-          },
-          "502": {
-            "$ref": "#/components/responses/Error502"
-          },
-          "503": {
-            "$ref": "#/components/responses/Error503"
-          },
-          "default": {
-            "$ref": "#/components/responses/UnexpectedError"
-          }
-        },
-        "x-handler": "src/api.rs::chat",
-        "x-csrf": "Required even for public setup/login unless Authorization starts with Bearer; cross-site/origin checks also apply to bearer requests.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/CsrfHeader"
-          },
-          {
-            "$ref": "#/components/parameters/Origin"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "description": "UTF-8 JSON, maximum total body 1 MiB. Byte-length limits are annotated separately from JSON Schema character counts.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatRequest"
-              },
-              "examples": {
-                "message": {
-                  "summary": "Illustrative, no real credentials or IDs",
-                  "value": {
-                    "conversation_id": "33333333-3333-4333-8333-333333333333",
-                    "model_id": "44444444-4444-4444-8444-444444444444",
-                    "content": "Summarize my authorized notes.",
-                    "idempotency_key": "example-chat-intent-001"
-                  }
-                }
-              }
-            }
-          }
-        }
       }
     }
   },
@@ -7845,15 +7856,8 @@
           },
           "attachments": {
             "type": "array",
-            "maxItems": 3,
-            "description": "UTF-8 text files sent with the message; combined text is at most 32768 UTF-8 bytes. The files inherit conversation visibility and are included in the model request.",
             "items": {
               "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "name",
-                "text"
-              ],
               "properties": {
                 "name": {
                   "type": "string",
@@ -7867,17 +7871,43 @@
                   "x-max-utf8-bytes": 16384,
                   "description": "UTF-8 text without NUL. Original bytes are preserved."
                 }
-              }
-            }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "text"
+              ]
+            },
+            "maxItems": 3,
+            "description": "UTF-8 text files sent with the message; combined text is at most 32768 UTF-8 bytes. The files inherit conversation visibility and are included in the model request."
           }
         },
-        "additionalProperties": true,
-        "description": "Extra JSON fields are currently ignored by ChatRequest deserialization. Sends an asynchronous run; HTTP success does not mean the model has completed.",
+        "additionalProperties": false,
+        "description": "Unknown top-level and attachment fields are rejected before admission. Older versions ignored extra chat fields. Sends an asynchronous run; HTTP success does not mean the model has completed.",
         "required": [
           "conversation_id",
           "content",
           "model_id",
           "idempotency_key"
+        ]
+      },
+      "ReconcileScheduleInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "acknowledge": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "acknowledge"
         ]
       },
       "BranchInput": {

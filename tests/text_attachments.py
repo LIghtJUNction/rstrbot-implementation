@@ -85,6 +85,24 @@ def main():
                     "idempotency_key": key,
                     "attachments": files,
                 }
+                # Unsupported media and typos must never be accepted as a
+                # text-only run, including on the dedicated attachment route.
+                before_runs = alice.get(base + "/resources/runs")["items"]
+                before_messages = alice.get(
+                    base + "/conversations/" + conversation["id"] + "/messages"
+                )["items"]
+                for route in ("/chat", "/chat/text-attachments"):
+                    for extra in (
+                        {"images": [{"name": "sample.png", "base64": "aGVsbG8="}]},
+                        {"content_typo": "intended additional content"},
+                        {"attachments": [{"name": "valid.txt", "text": "text", "image_url": "data:image/png;base64,aGVsbG8="}]},
+                    ):
+                        alice.post(base + route, dict(body, **extra), expect=(422,))
+                assert alice.get(base + "/resources/runs")["items"] == before_runs
+                assert alice.get(base + "/conversations/" + conversation["id"] + "/messages")["items"] == before_messages
+                with Provider.lock:
+                    assert not Provider.records
+                checks.append("unknown media, typo and attachment fields are rejected on both routes before message, run or model request")
                 first = alice.post(base + "/chat/text-attachments", body)
                 run = wait_for(
                     lambda: alice.get(base + "/runs/" + first["run"]["id"]),

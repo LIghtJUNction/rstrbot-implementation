@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChatRequest {
     pub conversation_id: String,
     pub content: String,
