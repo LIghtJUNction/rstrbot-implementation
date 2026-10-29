@@ -33,7 +33,7 @@ This establishes local SQLite, fake-provider, Chromium and Recipkg material chec
 
 ## CMP-03 工具调用 ID 关联回归（2026-10-29）
 
-基于源码提交 `9fd0f6d304ab3f0993dbb104e3a7b4f6ad493930` 的本地改动。修复前，`tests/plugin_catalog.py` 的真实独立Python SDK worker返回 `call_id: null`，而会话历史保存了模型工具ID；修复后，核心将原ID传进 `tools.call.params.call_id`。回归用固定 `catalog_fixed_tool_call` 逐字对比worker返回、持久工具消息和 `run.tool` 事件，三者相同。此检查未重启核心读取历史，也未通过WebUI安装自定义插件。
+修复已提交并推送至独立源码仓库，提交 `89355964d2c1f0561fed9188fbdc2b09b8e8c357`（父提交 `9fd0f6d304ab3f0993dbb104e3a7b4f6ad493930`）。修复前，`tests/plugin_catalog.py` 的真实独立Python SDK worker返回 `call_id: null`，而会话历史保存了模型工具ID；修复后，核心将原ID传进 `tools.call.params.call_id`。回归用固定 `catalog_fixed_tool_call` 逐字对比worker返回、持久工具消息和 `run.tool` 事件，三者相同。此检查未重启核心读取历史，也未通过WebUI安装自定义插件。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -45,3 +45,5 @@ This establishes local SQLite, fake-provider, Chromium and Recipkg material chec
 | Recipkg `check`、`pack`、归档`check`、`unpack`、解包目录`check`及`build --lang zh-CN` | 全部通过；归档109/109项均为普通UTF-8 Markdown，LOCK完整，生成提示词包含109/109份材料及全部新关联ID验收。归档 SHA-256：`11feff4fd80fcec53fc2c390d65be1eebc4c19c5a421a78ec7881a97f3867e40`；中文提示词 SHA-256：`b0c75ba4a7d8314d478947701edaa38835b4acba10bf1ee9567d40030b0c70c4`。 |
 
 证据目录：`/home/lightjunction/.cache/rstrbot-comparison-3zpgia2m/rstrbot-cmp03-call-id-20261029/`。报告 SHA-256：`sdk-conformance.json` `a81208bf0502e3d373dc17fee2ae97e7e5289964273a150a798a8ad1953a80b8`；`plugin-catalog.json` `657245d483603bd7c02252633efdfbd20726835dc7bed1f580018096447348b5`；`host-process.txt` `c28fe135c4bcbeeab763b3fd04a630c5ca1d96e9f7dd7d08a8cc280f44c9610c`。均为隔离本地合成数据；没有联系模型供应商或重启常驻服务。完整CMP-03仍是partial，不能由这组调用关联检查推断WebUI自定义安装、撤权/恢复、跨平台或竞品对比已通过。
+
+来源证据配方文件补齐后，最终 Recipkg `check`、`pack`、归档 `check`、`unpack`、解包目录 `check` 和 `build --lang zh-CN` 均通过，版本为 `rstrbot@0.2.0-recipe.28`。最终归档 SHA-256：`79a6c87154b99bcae69a5eceb5070ab13f97fb0fc4c1e0ef558b9a8a7fd77185`；中文提示词 SHA-256：`73c386d589185978cc45be6387225292361315d415202e168ee7d404dbe651ce`。归档含109份普通UTF-8 Markdown与完整LOCK；逐文件检查确认109/109材料正文出现在生成提示词中。
