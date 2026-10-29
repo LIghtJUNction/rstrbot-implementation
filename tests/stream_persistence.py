@@ -11,6 +11,7 @@ import http.server
 import json
 from pathlib import Path
 import platform
+import sqlite3
 import tempfile
 import threading
 import time
@@ -122,6 +123,77 @@ def exercise(binary, report):
             with Provider.lock:
                 assert Provider.requests == 3, Provider.requests
             report["checks"].append("after the accepted HTTP/SSE call, changed-body key conflict returns 409 with no new provider request, run, message or event")
+
+            post_label = "post-response-conflict"
+            post_conversation = client.post(base + "/resources/conversations", {
+                "visibility": "private", "data": {"title": post_label}})
+            marker = f"{post_label}:49|"
+            trigger = "reject_final_assistant_" + uuid.uuid4().hex
+            with sqlite3.connect(instance.directory / "rstrbot.db", timeout=5) as connection:
+                connection.execute(f"""CREATE TRIGGER {trigger} BEFORE UPDATE ON resources
+                    WHEN OLD.id = '{post_conversation["id"]}' AND instr(NEW.data, '{marker}') > 0
+                    BEGIN SELECT RAISE(IGNORE); END""")
+            post_body = {"conversation_id": post_conversation["id"], "model_id": model["id"],
+                         "content": post_label, "idempotency_key": str(uuid.uuid4())}
+            with Provider.lock:
+                provider_requests_before_response = Provider.requests
+                assert provider_requests_before_response == 3, provider_requests_before_response
+            post_admitted = client.post(base + "/chat", post_body)
+            post_run_id = post_admitted["run"]["id"]
+            failed = wait_for(lambda: client.get(base + "/runs/" + post_run_id),
+                              lambda value: value["data"]["status"] in TERMINAL)
+            assert failed["data"]["status"] == "failed", failed
+            assert failed["data"]["error_code"] == "conflict", failed
+            assert failed["data"]["content"] == "", failed
+            assert len(failed["data"]["model_calls"]) == 1
+            assert failed["data"]["model_calls"][0]["status"] == "completed"
+            assert failed["data"]["model_calls"][0]["stream_persistence"] == "saved"
+            assert failed["data"]["model_calls"][0]["usage"]["completion_tokens"] == 50
+            messages_after_conflict = client.get(base + f"/conversations/{post_conversation['id']}/messages")
+            assert [item["role"] for item in messages_after_conflict["items"]] == ["user"]
+            with Provider.lock:
+                provider_requests_after_response = Provider.requests
+                assert provider_requests_after_response == provider_requests_before_response + 1
+                assert provider_requests_after_response == 4, provider_requests_after_response
+
+            run_ids_after_conflict = {run["id"] for run in client.get(base + "/resources/runs")["items"]}
+            events_after_conflict = wait_for(
+                lambda: client.get(base + "/events?limit=500")["items"],
+                lambda items: any(event["kind"] == "run.finished"
+                                  and event["data"]["run_id"] == post_run_id for event in items))
+            finish_events = [event for event in events_after_conflict
+                             if event["kind"] == "run.finished" and event["data"]["run_id"] == post_run_id]
+            assert len(finish_events) == 1 and finish_events[0]["data"]["error_code"] == "conflict"
+            conflict_deltas = [event["data"]["delta"] for event in events_after_conflict
+                               if event["kind"] == "run.delta" and event["data"]["run_id"] == post_run_id]
+            expected_conflict_stream = "".join(f"{post_label}:{index:02d}|" for index in range(50))
+            assert len(conflict_deltas) == 50 and "".join(conflict_deltas) == expected_conflict_stream
+            replayed = client.post(base + "/chat", post_body)
+            assert replayed["run"]["id"] == post_run_id
+            client.post(base + "/chat", {**post_body, "content": post_label + ":changed"}, expect=(409,))
+            assert {run["id"] for run in client.get(base + "/resources/runs")["items"]} == run_ids_after_conflict
+            assert client.get(base + f"/conversations/{post_conversation['id']}/messages") == messages_after_conflict
+            assert client.get(base + "/events?limit=500")["items"] == events_after_conflict
+            with Provider.lock:
+                provider_requests_after_replays = Provider.requests
+                assert provider_requests_after_replays == provider_requests_after_response
+            report["post_response_conflict"] = {
+                "injected_by": "SQLite trigger makes assistant append CAS affect zero rows",
+                "run_status": failed["data"]["status"],
+                "run_error_code": failed["data"]["error_code"],
+                "model_call_status": failed["data"]["model_calls"][0]["status"],
+                "stream_persistence": failed["data"]["model_calls"][0]["stream_persistence"],
+                "completion_tokens": failed["data"]["model_calls"][0]["usage"]["completion_tokens"],
+                "conversation_message_roles": [item["role"] for item in messages_after_conflict["items"]],
+                "persisted_delta_count": len(conflict_deltas),
+                "provider_requests_after_response": provider_requests_after_response,
+                "provider_requests_before_response": provider_requests_before_response,
+                "provider_requests_after_replays": provider_requests_after_replays,
+                "exact_key_replay_returned_original_run": replayed["run"]["id"] == post_run_id,
+                "changed_body_same_key_status": 409,
+                "run_finished_conflict_event_count": len(finish_events),
+            }
+            report["checks"].append("post-response assistant-message CAS conflict fails the run without replay; model call stays completed once, history is unchanged, and exact/conflicting keys dispatch no further request")
     finally:
         if instance:
             instance.stop()
