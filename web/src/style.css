@@ -743,5 +743,6 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 
 .text-attachments { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-bottom: 8px; }
 .attachment-picker { cursor: pointer; }
+.attachment-picker:has(input:disabled) { opacity: .5; cursor: not-allowed; }
 .attachment-picker:focus-within { outline: 2px solid currentColor; outline-offset: 2px; }
 .attachment-item { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; overflow-wrap: anywhere; }
