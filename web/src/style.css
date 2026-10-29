@@ -746,3 +746,5 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 .attachment-picker:has(input:disabled) { opacity: .5; cursor: not-allowed; }
 .attachment-picker:focus-within { outline: 2px solid currentColor; outline-offset: 2px; }
 .attachment-item { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; overflow-wrap: anywhere; }
+
+.chat-image { display: block; max-width: min(100%, 28rem); max-height: 24rem; object-fit: contain; border-radius: 10px; }

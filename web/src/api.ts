@@ -9,7 +9,7 @@ export type Resource = {
   created_at: string | number; updated_at: string | number;
 };
 export type Setup = { initialized: boolean; database?: string; valkey?: string | boolean; valkey_status?: string; data_dir?: string; database_selection?: boolean };
-export type Message = { id?: string; role: string; content: string; tool_call_id?: string; name?: string; created_at?: string | number; citations?: unknown; attachments?: unknown };
+export type Message = { id?: string; role: string; content: string; tool_call_id?: string; name?: string; created_at?: string | number; citations?: unknown; attachments?: unknown; images?: unknown };
 export type Event = { id: number; resource_id?: string; kind?: string; event_type?: string; data: Json; created_at?: string | number };
 
 export class ApiError extends Error {

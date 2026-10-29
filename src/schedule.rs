@@ -329,6 +329,7 @@ async fn dispatch(
             .and_then(Value::as_str)
             .map(str::to_owned),
         attachments: Vec::new(),
+        images: Vec::new(),
     };
     match engine::start(state, user, claimed.workspace_id.clone(), request).await {
         Ok(result) => {

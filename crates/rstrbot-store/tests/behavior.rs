@@ -1156,6 +1156,7 @@ fn run_intent(conversation: &str, model: &str, key: &str) -> rstrbot_store::RunA
         fingerprint: format!("fingerprint-{key}"),
         content: format!("message-{key}"),
         attachments: Vec::new(),
+        images: Vec::new(),
     }
 }
 

@@ -1,4 +1,40 @@
 export type TextAttachment = { name: string; text: string };
+export type ImageAttachment = { name: string; mime: 'image/png' | 'image/jpeg'; data: string };
+
+export function parseImages(value: unknown): ImageAttachment[] | null {
+  if (!Array.isArray(value) || value.length > 3) return null;
+  const images: ImageAttachment[] = []; let total = 0;
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || !('name' in item) || !('mime' in item) || !('data' in item) || typeof item.name !== 'string' || typeof item.data !== 'string') return null;
+    if (!((item.mime === 'image/png' && /\.png$/i.test(item.name)) || (item.mime === 'image/jpeg' && /\.jpe?g$/i.test(item.name))) || /[\x00-\x1f\x7f-\x9f/\\]/.test(item.name) || new TextEncoder().encode(item.name).length > 255 || item.data.length > 349528) return null;
+    let bytes: string;
+    try { bytes = atob(item.data); } catch { return null; }
+    if (!bytes.length || btoa(bytes) !== item.data) return null;
+    total += bytes.length;
+    images.push({ name: item.name, mime: item.mime, data: item.data });
+  }
+  return total <= 262144 ? images : null;
+}
+
+export function readDraftImages(raw: string): ImageAttachment[] {
+  try { return parseImages(JSON.parse(raw)) ?? []; } catch { return []; }
+}
+
+export async function decodeImages(files: File[], previous: ImageAttachment[]): Promise<ImageAttachment[]> {
+  if (files.length + previous.length > 3 || files.some(file => file.size > 262144)) throw new Error('image_limit');
+  const images = [...previous];
+  for (const file of files) {
+    const mime = /\.png$/i.test(file.name) ? 'image/png' : /\.jpe?g$/i.test(file.name) ? 'image/jpeg' : null;
+    if (!mime) throw new Error('image_format');
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    images.push({ name: file.name, mime, data: btoa(binary) });
+  }
+  const parsed = parseImages(images);
+  if (!parsed) throw new Error('image_invalid');
+  return parsed;
+}
 
 export function parseAttachments(value: unknown): TextAttachment[] | null {
   if (!Array.isArray(value) || value.length > 3) return null;

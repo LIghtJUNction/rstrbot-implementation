@@ -27,6 +27,35 @@ pub use resources::{ResourceCursor, ResourcePage, VisibleResourceCursor, Visible
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Select a bounded conversation context without splitting a user turn.
+/// Image turns get more room while remaining below the plugin request limit.
+pub fn history_context_start(history: &[&Value]) -> usize {
+    let starts: Vec<usize> = history
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| (m["role"] == "user").then_some(i))
+        .collect();
+    let mut start = starts.iter().rev().nth(15).copied().unwrap_or(0);
+    let has_images = history.iter().any(|m| {
+        m["images"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    });
+    let limit = if has_images { 400_000 } else { 180_000 };
+    while history[start..]
+        .iter()
+        .map(|message| message.to_string().len())
+        .sum::<usize>()
+        > limit
+    {
+        let Some(next) = starts.iter().copied().find(|index| *index > start) else {
+            break;
+        };
+        start = next;
+    }
+    start
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("authentication required or expired")]
@@ -45,6 +74,18 @@ pub enum Error {
     Invalid(String),
     #[error("workspace budget cannot cover this reservation")]
     BudgetExceeded,
+    #[error(
+        "This conversation contains images; choose an OpenAI-compatible model explicitly configured for image input, or reset its context"
+    )]
+    ImageModelRequired,
+    #[error("Image cost cannot be reliably estimated while a workspace budget is enabled")]
+    ImageBudgetEnabled,
+    #[error(
+        "The conversation context would omit an earlier image; reset the context or start a new conversation"
+    )]
+    ImageContextLimit,
+    #[error("Cannot enable a budget while an image request with unknown cost is in flight")]
+    ImageBudgetInFlight,
     #[error("database operation failed: {0}")]
     Database(#[from] sqlx::Error),
     #[error("stored data is invalid: {0}")]
@@ -163,6 +204,7 @@ pub struct RunAdmissionRequest {
     pub fingerprint: String,
     pub content: String,
     pub attachments: Vec<TextAttachment>,
+    pub images: Vec<ImageAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +212,16 @@ pub struct RunAdmissionRequest {
 pub struct TextAttachment {
     pub name: String,
     pub text: String,
+}
+
+/// Validated original image bytes, encoded without transformation for storage
+/// and provider transfer. Authorization follows the containing conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageAttachment {
+    pub name: String,
+    pub mime: String,
+    pub data: String,
 }
 
 pub struct RunAdmission {

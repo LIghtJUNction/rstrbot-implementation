@@ -103,7 +103,7 @@ schema("MembershipChange", obj({"user_id": ID, "role": ROLE}, ["user_id", "role"
 schema("Capability", obj({"supported": BOOL, "authorized": BOOL, "available": BOOL, "reason": string()}, ["supported", "authorized", "available"]))
 schema("Capabilities", {"type": "object", "additionalProperties": ref("Capability"),
     "description": "Independent support, current authorization and live availability. Unsupported attachments/vector_search/legacy_compatibility/desktop_installers/multi_node are reported as false, not exposed as working routes.",
-    "properties": {name: ref("Capability") for name in ["chat", "knowledge", "memories", "schedules", "models", "plugins", "agents", "members", "audit", "export", "backup", "routes", "attachments", "vector_search", "legacy_compatibility", "desktop_installers", "multi_node"]}})
+    "properties": {name: ref("Capability") for name in ["chat", "text_attachments", "image_attachments", "knowledge", "memories", "schedules", "models", "plugins", "agents", "members", "audit", "export", "backup", "routes", "attachments", "vector_search", "legacy_compatibility", "desktop_installers", "multi_node"]}})
 schema("Package", obj({"id": ID, "name": string(), "version": string(), "capabilities": array(string()),
     "permissions": array(string()), "checksum": nullable(string())}, ["id", "name", "version", "capabilities", "permissions", "checksum"]))
 collection("PackageList", ref("Package"))
@@ -186,7 +186,7 @@ schema("ModelInput", obj({"name": text(200, nonblank=True), "model": text(200, n
     "provider": string("Installed package with model capability; bundled values are openai and diagnostic. Third-party installed provider IDs are allowed.", default="openai"),
     "base_url": text(2048, "Required unless provider is diagnostic. Public endpoints require HTTPS, no embedded credentials/query/fragment. HTTP/private targets require explicit instance and resource approval."),
     "api_key": text(8192, "Write-only; omitted or empty preserves the previous secret only for the same normalized URL and provider. Changing either requires a new secret or clear_api_key=true.") | {"writeOnly": True, "format": "password"},
-    "clear_api_key": BOOL, "max_tokens": integer(minimum=1, maximum=32768, default=2048),
+    "clear_api_key": BOOL, "supports_images": BOOL | {"default": False, "description": "Explicit user declaration that this OpenAI-compatible model accepts image input; not automatically verified."}, "max_tokens": integer(minimum=1, maximum=32768, default=2048),
     "input_microusd_per_million": price, "output_microusd_per_million": price,
     "allow_private_network": BOOL}, ["name", "model"],
     description="Private-network authorization is bound to an instance-approved full URL and provider and is subject to the global policy at invocation. Unknown fields are ignored; a model's existence does not prove endpoint connectivity."))
@@ -247,6 +247,14 @@ schema("ChatRequest", obj({"conversation_id": ID, "content": text(32768, nonblan
                          maxItems=3, description="UTF-8 text files sent with the message; combined text is at most 32768 UTF-8 bytes. The files inherit conversation visibility and are included in the model request.")},
     ["conversation_id", "content", "model_id", "idempotency_key"], True,
     description="Unknown top-level and attachment fields are rejected before admission. Older versions ignored extra chat fields. Sends an asynchronous run; HTTP success does not mean the model has completed."))
+schema("ImageChatRequest", deepcopy(SCHEMAS["ChatRequest"]))
+SCHEMAS["ImageChatRequest"]["properties"]["images"] = array(obj({
+    "name": text(255, "A PNG/JPEG filename without paths or control characters."),
+    "mime": string(enum=["image/png", "image/jpeg"]),
+    "data": string("Original bytes in canonical Base64. Total decoded bytes across images is at most 262144.", maxLength=349528),
+}, ["name", "mime", "data"], True), minItems=1, maxItems=3)
+SCHEMAS["ImageChatRequest"]["required"].append("images")
+SCHEMAS["ImageChatRequest"]["description"] = "Use only on the image-attachments route. Images are stored with conversation visibility and sent to an explicitly image-enabled OpenAI-compatible model. Image costs are unknown and dispatch is rejected while a workspace budget is enabled."
 schema("ReconcileScheduleInput", obj({"version": integer(minimum=1), "acknowledge": {"const": True, "type": "boolean"}}, ["version", "acknowledge"], True))
 schema("BranchInput", obj({"message_id": ID, "content": text(32768, nonblank=True)}, ["message_id", "content"], True))
 schema("SendRequest", obj({"text": text(32768, nonblank=True),
@@ -256,6 +264,7 @@ schema("SendRequest", obj({"text": text(32768, nonblank=True),
 schema("Message", obj({"id": ID, "role": string(), "content": {"description": "Provider-preserved JSON content, normally text; rendered as safe text by this release."},
     "created_at": TIME, "run_id": ID, "generation": integer(minimum=0), "tool_call_id": string(), "name": string(),
     "tool_calls": array(obj({"id": string(), "type": string(), "function": obj({"name": string(), "arguments": string()})})),
+    "images": array(obj({"name": string(), "mime": string(enum=["image/png", "image/jpeg"]), "data": string("Original bytes encoded as Base64."), "sha256": string("SHA-256 of decoded original bytes.")}, ["name", "mime", "data", "sha256"], True), maxItems=3),
     "citations": array({})}, description="Provider fields may be retained, but api_key/token/password/provider_state fields are recursively omitted from HTTP views. Plain model text never triggers a tool."))
 schema("ConversationData", obj({"title": string(), "system_prompt": string(), "generation": integer(minimum=0),
     "active_run": nullable(ID), "messages": array(ref("Message")), "message_count": integer(minimum=0),
@@ -539,6 +548,7 @@ operation("/workspaces/{wid}/resource/{id}", "patch", "update_resource", "Replac
 operation("/workspaces/{wid}/resource/{id}", "delete", "delete_resource", "Delete an editable resource at its current version", write_rules + "version query is required. Conversation deletion cancels active runs and removes related history/events; runs/deliveries cannot be deleted through this generic endpoint.", query=["Version"], errors=["404", "409"], status="204")
 operation("/workspaces/{wid}/chat", "post", "chat", "Accept an idempotent asynchronous conversation run", "Member minimum and write access to conversation. Shared conversations require a shared agent and automatically use only shared knowledge, memories and tool instances. The original HTTP credential remains an execution lease; expiry/revocation cancels that credential's active runs. Returns HTTP 200 with run plus conversation metadata; this does not mean completion. Exact replay uses original idempotency key; do not issue a new key after uncertain HTTP transport. Recovery, active conversation or capacity may reject admission before side effects.", "ChatAccepted", "ChatRequest", tag="Execution", errors=["402", "404", "409", "429", "502"], request_examples={"message": {"conversation_id": rid, "model_id": modelid, "content": "Summarize my authorized notes.", "idempotency_key": "example-chat-intent-001"}})
 operation("/workspaces/{wid}/chat/text-attachments", "post", "chat", "Accept a conversation run with UTF-8 text attachments", "Use this route for text attachments so older cores reject the request instead of silently ignoring unrecognized attachment fields. It follows the same access, idempotency and execution rules as chat.", "ChatAccepted", "ChatRequest", tag="Execution", errors=["402", "404", "409", "429", "502"], operation_id="chat_with_text_attachments", request_examples={"message": {"conversation_id": rid, "model_id": modelid, "content": "Summarize my authorized notes.", "idempotency_key": "example-chat-intent-001"}})
+operation("/workspaces/{wid}/chat/image-attachments", "post", "chat_images", "Accept a conversation run with original PNG/JPEG images", "Only the dedicated route accepts images. It follows chat authorization and idempotency; a workspace budget or an image-incompatible model prevents dispatch.", "ChatAccepted", "ImageChatRequest", tag="Execution", errors=["402", "404", "409", "429", "502"])
 operation("/workspaces/{wid}/routes/{id}/send", "post", "send_route", "Send once to an explicitly authorized route", "Member minimum plus current access to the enabled route. Durable private intent is written before dispatch; repeated identical key returns saved receipt. This call waits for the bounded worker result; accepted/rejected/unknown can all be HTTP 200 resource responses. No destination/token override, autonomous scheduling, guaranteed receiver deduplication or automatic retry is implied.", "DeliveryResource", "SendRequest", tag="Delivery", errors=["404", "409", "500"], request_examples={"send": {"text": "Example delivery text", "idempotency_key": "example-delivery-intent-001"}})
 operation("/workspaces/{wid}/runs/{id}", "get", "run", "Read an authorized run", "Resource must be a run in the current workspace and visible to caller.", "RunResource", tag="Execution", errors=["404"])
 operation("/workspaces/{wid}/runs/{id}/cancel", "post", "cancel_run", "Request cancellation of a run", "Member minimum. Caller owns the run or has operator role on a visible shared run. Cancels the in-memory execution lease if present; 204 does not undo an already observed external effect or prove a terminal record has persisted. Poll the run/events.", tag="Execution", status="204", errors=["404"])

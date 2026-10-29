@@ -97,6 +97,26 @@ impl From<rstrbot_store::Error> for AppError {
                 "The record changed or this operation is already in progress; reload before retrying",
             ),
             Error::Invalid(s) => Self::bad_request(s),
+            Error::ImageModelRequired => Self::new(
+                StatusCode::BAD_REQUEST,
+                "image_model_required",
+                Error::ImageModelRequired.to_string(),
+            ),
+            Error::ImageBudgetEnabled => Self::new(
+                StatusCode::BAD_REQUEST,
+                "image_budget_enabled",
+                Error::ImageBudgetEnabled.to_string(),
+            ),
+            Error::ImageContextLimit => Self::new(
+                StatusCode::BAD_REQUEST,
+                "image_context_limit",
+                Error::ImageContextLimit.to_string(),
+            ),
+            Error::ImageBudgetInFlight => Self::new(
+                StatusCode::BAD_REQUEST,
+                "image_budget_in_flight",
+                Error::ImageBudgetInFlight.to_string(),
+            ),
             Error::BudgetExceeded => Self::new(
                 StatusCode::PAYMENT_REQUIRED,
                 "budget_exceeded",
@@ -630,9 +650,21 @@ pub async fn prepare_data(
                     "input_microusd_per_million",
                     "output_microusd_per_million",
                     "allow_private_network",
+                    "supports_images",
                 ],
             );
             out["provider"] = json!(provider);
+            let supports_images = match data.get("supports_images") {
+                None => false,
+                Some(Value::Bool(value)) => *value,
+                _ => return Err(AppError::bad_request("supports_images must be a boolean")),
+            };
+            if supports_images && provider != "openai" {
+                return Err(AppError::bad_request(
+                    "Image input requires the OpenAI-compatible provider",
+                ));
+            }
+            out["supports_images"] = json!(supports_images);
             let destination_unchanged = previous.is_some_and(|previous| {
                 previous.data["provider"].as_str().unwrap_or("openai") == provider
                     && same_url(

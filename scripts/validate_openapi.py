@@ -211,7 +211,7 @@ def dto_checks(document):
             "SetupInput": ["SetupInput"], "DatabaseInput": ["DatabaseInput"], "WorkspaceInput": ["WorkspaceInput"],
             "MemberInput": ["MemberInput"], "RoleInput": ["RoleInput"], "CreateResource": ["CreateResource"],
             "UpdateResource": ["UpdateResource"], "BranchInput": ["BranchInput"], "BudgetInput": ["BudgetInput"]},
-        "src/engine.rs": {"ChatRequest": ["ChatRequest"]},
+        "src/engine.rs": {"ChatRequest": ["ChatRequest", "ImageChatRequest"]},
         "src/delivery.rs": {"SendRequest": ["SendRequest"]},
         "src/email_auth.rs": {"EmailInput": ["EmailInput"], "VerifyInput": ["EmailVerifyInput"], "ResetInput": ["EmailResetInput"]},
         "src/identity_config.rs": {"GoogleInput": ["GoogleSettingsInput"], "SmtpInput": ["SmtpSettingsInput"], "SettingsInput": ["AuthSettingsInput"]},
@@ -244,9 +244,15 @@ def dto_checks(document):
             closed = "deny_unknown_fields" in before[last_derive:]
             for schema_name in schema_names:
                 schema = document["components"]["schemas"][schema_name]
-                if set(schema.get("properties", {})) != fields:
+                # The HTTP handlers split the shared Rust DTO: ordinary chat
+                # rejects images and the dedicated route requires them.
+                expected_fields = fields - {"images"} if schema_name == "ChatRequest" else fields
+                required = fields - optional
+                if schema_name == "ImageChatRequest":
+                    required |= {"images"}
+                if set(schema.get("properties", {})) != expected_fields:
                     raise ValueError(f"{rust_name}/{schema_name}: DTO fields differ")
-                if set(schema.get("required", [])) != fields - optional:
+                if set(schema.get("required", [])) != required:
                     raise ValueError(f"{rust_name}/{schema_name}: required/optional fields differ")
                 if (schema.get("additionalProperties") is False) != closed:
                     raise ValueError(f"{rust_name}/{schema_name}: unknown-field behavior differs")

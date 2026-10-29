@@ -1,6 +1,19 @@
 use crate::*;
 
 impl Store {
+    /// On restart, preserve the unknown outcome of image calls belonging to a
+    /// run interrupted by the previous process. No external action is replayed.
+    pub async fn mark_interrupted_image_costs(&self, workspace: &str, run_id: &str) -> Result<()> {
+        uuid::Uuid::parse_str(run_id).map_err(|_| Error::Invalid("Invalid run ID".into()))?;
+        let mut tx = self.pool.begin().await?;
+        lock_workspace(&mut tx, workspace).await?;
+        sqlx::query("UPDATE reservations SET state = 'unknown', updated_at = $1 WHERE workspace_id = $2 AND state = 'reserved' AND operation_id LIKE $3")
+            .bind(now()).bind(workspace).bind(format!("{run_id}:model:%:image-unknown-cost"))
+            .execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn budget(&self, workspace: &str, user: &str) -> Result<Budget> {
         self.membership(workspace, user).await?;
         let row = sqlx::query("SELECT b.*, (SELECT COUNT(*) FROM reservations r WHERE r.workspace_id = b.workspace_id AND r.state = 'unknown') AS unknown_reservations FROM budgets b WHERE b.workspace_id = $1")
@@ -28,6 +41,13 @@ impl Store {
         lock_workspace(&mut tx, workspace).await?;
         if role_in(&mut tx, workspace, user).await? < Role::Admin {
             return Err(Error::Forbidden);
+        }
+        if limit.is_some() {
+            let active_unknown: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reservations WHERE workspace_id = $1 AND state = 'reserved' AND operation_id LIKE '%:image-unknown-cost'")
+                .bind(workspace).fetch_one(&mut *tx).await?;
+            if active_unknown > 0 {
+                return Err(Error::ImageBudgetInFlight);
+            }
         }
         sqlx::query("UPDATE budgets SET limit_microusd = $1 WHERE workspace_id = $2")
             .bind(limit.unwrap_or(-1))
@@ -57,6 +77,35 @@ impl Store {
         operation: &str,
         amount: i64,
     ) -> Result<Reservation> {
+        self.reserve_inner(workspace, user, operation, amount, false)
+            .await
+    }
+
+    /// Atomically exclude image dispatch while a workspace budget is enabled.
+    pub async fn reserve_image_unknown(
+        &self,
+        workspace: &str,
+        user: &str,
+        operation: &str,
+    ) -> Result<Reservation> {
+        self.reserve_inner(
+            workspace,
+            user,
+            &format!("{operation}:image-unknown-cost"),
+            0,
+            true,
+        )
+        .await
+    }
+
+    async fn reserve_inner(
+        &self,
+        workspace: &str,
+        user: &str,
+        operation: &str,
+        amount: i64,
+        image_unknown: bool,
+    ) -> Result<Reservation> {
         checked_label(operation, "operation id", 200)?;
         if !(0..=i64::MAX / 4).contains(&amount) {
             return Err(Error::Invalid("invalid reservation amount".into()));
@@ -65,6 +114,16 @@ impl Store {
         lock_workspace(&mut tx, workspace).await?;
         if role_in(&mut tx, workspace, user).await? < Role::Member {
             return Err(Error::Forbidden);
+        }
+        if image_unknown {
+            let limit: i64 =
+                sqlx::query_scalar("SELECT limit_microusd FROM budgets WHERE workspace_id = $1")
+                    .bind(workspace)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if limit >= 0 {
+                return Err(Error::ImageBudgetEnabled);
+            }
         }
         if let Some(row) =
             sqlx::query("SELECT * FROM reservations WHERE workspace_id = $1 AND operation_id = $2")

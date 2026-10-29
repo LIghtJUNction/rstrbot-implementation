@@ -78,6 +78,10 @@ pub fn router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/workspaces/{wid}/chat", post(chat))
         .route("/workspaces/{wid}/chat/text-attachments", post(chat))
+        .route(
+            "/workspaces/{wid}/chat/image-attachments",
+            post(chat_images),
+        )
         .route("/workspaces/{wid}/routes/{id}/send", post(send_route))
         .route("/workspaces/{wid}/runs/{id}", get(run))
         .route("/workspaces/{wid}/runs/{id}/cancel", post(cancel_run))
@@ -878,6 +882,30 @@ async fn chat(
     Path(wid): Path<String>,
     Payload(body): Payload<ChatRequest>,
 ) -> ApiResult<Json<Value>> {
+    if !body.images.is_empty() {
+        return Err(AppError::bad_request(
+            "Use the image-attachments route for images",
+        ));
+    }
+    submit_chat(state, headers, wid, body).await
+}
+async fn chat_images(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(wid): Path<String>,
+    Payload(body): Payload<ChatRequest>,
+) -> ApiResult<Json<Value>> {
+    if body.images.is_empty() {
+        return Err(AppError::bad_request("Select at least one image"));
+    }
+    submit_chat(state, headers, wid, body).await
+}
+async fn submit_chat(
+    state: AppState,
+    headers: HeaderMap,
+    wid: String,
+    body: ChatRequest,
+) -> ApiResult<Json<Value>> {
     let user = actor(&state, &headers).await?;
     let mut result = engine::start_authenticated(state, user, wid, body, token(&headers)?).await?;
     if let Some(data) = result
@@ -1241,6 +1269,11 @@ async fn capabilities(
     for (name, minimum, available) in [
         ("chat", Role::Member, provider && !recovery),
         ("text_attachments", Role::Member, provider && !recovery),
+        (
+            "image_attachments",
+            Role::Member,
+            installed.contains_key("openai") && !recovery,
+        ),
         ("knowledge", Role::Viewer, true),
         ("memories", Role::Viewer, true),
         ("schedules", Role::Member, !recovery),
@@ -1260,11 +1293,17 @@ async fn capabilities(
         capability["max_file_bytes"] = json!(16_384);
         capability["max_total_bytes"] = json!(32_768);
     }
+    if let Some(capability) = out.get_mut("image_attachments") {
+        capability["extensions"] = json!([".png", ".jpg", ".jpeg"]);
+        capability["max_files"] = json!(3);
+        capability["max_total_bytes"] = json!(262_144);
+        capability["max_dimension"] = json!(2048);
+    }
     out.insert("routes".into(),json!({"supported":installed.contains_key("webhook"),"authorized":role>=Role::Member,"available":installed.contains_key("webhook")&&!recovery}));
     for (name, reason) in [
         (
             "attachments",
-            "Images, audio, PDF, binary files and dedicated uploads are not supported; UTF-8 text files are available through chat",
+            "Audio, PDF, binary files and dedicated uploads are not supported; bounded UTF-8 text and PNG/JPEG images are available through chat",
         ),
         (
             "vector_search",

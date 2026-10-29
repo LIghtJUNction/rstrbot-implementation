@@ -132,6 +132,29 @@ impl Store {
         let generation = conversation.data["generation"]
             .as_u64()
             .ok_or_else(|| Error::Invalid("conversation generation is invalid".into()))?;
+        let prior_images = conversation.data["messages"]
+            .as_array()
+            .is_some_and(|messages| {
+                messages.iter().any(|message| {
+                    message["generation"].as_u64() == Some(generation)
+                        && message["images"]
+                            .as_array()
+                            .is_some_and(|images| !images.is_empty())
+                })
+            });
+        if !request.images.is_empty() || prior_images {
+            if model.data["provider"] != "openai" || model.data["supports_images"] != true {
+                return Err(Error::ImageModelRequired);
+            }
+            let budget: i64 =
+                sqlx::query_scalar("SELECT limit_microusd FROM budgets WHERE workspace_id = $1")
+                    .bind(workspace)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if budget >= 0 {
+                return Err(Error::ImageBudgetEnabled);
+            }
+        }
         let created_at = now();
         let run = Resource {
             id: new_id(),
@@ -160,7 +183,28 @@ impl Store {
                 "name":item.name, "text":item.text, "sha256":format!("{:x}", Sha256::digest(item.text.as_bytes()))
             })).collect::<Vec<_>>());
         }
+        if !request.images.is_empty() {
+            use base64::Engine as _;
+            let images: Result<Vec<_>> = request.images.iter().map(|image| {
+                let bytes = base64::engine::general_purpose::STANDARD.decode(&image.data)
+                    .map_err(|_| Error::Invalid("Invalid image encoding".into()))?;
+                Ok(serde_json::json!({"name":image.name,"mime":image.mime,"data":image.data,"sha256":format!("{:x}", Sha256::digest(&bytes))}))
+            }).collect();
+            message["images"] = serde_json::json!(images?);
+        }
         history.push(message);
+        let current_history: Vec<&Value> = history
+            .iter()
+            .filter(|message| message["generation"].as_u64() == Some(generation))
+            .collect();
+        let start = history_context_start(&current_history);
+        if current_history[..start].iter().any(|message| {
+            message["images"]
+                .as_array()
+                .is_some_and(|images| !images.is_empty())
+        }) {
+            return Err(Error::ImageContextLimit);
+        }
         conversation.data["active_run"] = serde_json::json!(run.id);
         // Record the target in the same transaction as the accepted user turn.
         conversation.data["last_model_id"] = serde_json::json!(model.id);

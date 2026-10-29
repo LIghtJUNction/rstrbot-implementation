@@ -114,6 +114,9 @@ When changing workspaces, reselecting the current workspace must leave in-flight
 
 工具目录按当前权限分页发现。单插件最多声明 32 个工具，单次运行最多提供 64 个可用只读工具；超限时运行会在模型生成和业务工具调用之前失败，并在运行记录说明如何处理。请按需要停用工具实例，不要靠扩大权限解决目录问题。
 
-会话文本附件目前支持 UTF-8 `.txt` 和 `.md`，最多三个，每个不超过 16 KiB、总计不超过 32 KiB。正文和文件一起发送给当前模型，也对会话读者可见；历史里可下载原始字节。选择新文件不会自动发送。图片、音频和 PDF 暂不支持；分支编辑不会复制被编辑消息的附件，界面会提示重新添加。运行 `python3 tests/text_attachments.py` 与 `node tests/browser/verify_text_attachments.mjs --chromium /usr/bin/chromium` 验证真实模型接收端和原文下载。
+会话文本附件目前支持 UTF-8 `.txt` 和 `.md`，最多三个，每个不超过 16 KiB、总计不超过 32 KiB。正文和文件一起发送给当前模型，也对会话读者可见；历史里可下载原始字节。选择新文件不会自动发送。图片使用独立的 PNG/JPEG 路径；音频和 PDF 暂不支持；分支编辑不会复制被编辑消息的附件，界面会提示重新添加。运行 `python3 tests/text_attachments.py` 与 `node tests/browser/verify_text_attachments.mjs --chromium /usr/bin/chromium` 验证真实模型接收端和原文下载。
 
-调用聊天接口时，只发送 [API 合同](API_CONTRACT.md)列出的字段。新版会以 422 拒绝未知字段，包括还未支持的图片字段；旧版会忽略这些字段，所以客户端不能把旧版的成功响应当作图片已送达。迁移已有客户端时先删除多余字段，使用文本附件专用入口，并用上述测试核对模型接收内容。
+调用聊天接口时，只发送 [API 合同](API_CONTRACT.md)列出的字段。新版会以 422 拒绝未知字段，包括未声明的字段；图片须使用专用入口，旧版可能忽略这些字段，所以客户端不能把旧版的成功响应当作图片已送达。迁移已有客户端时先删除多余字段，使用文本附件专用入口，并用上述测试核对模型接收内容。
+
+
+图片输入：在 OpenAI 兼容模型配置中，先根据[提供方图片输入文档](https://developers.openai.com/api/docs/guides/images-vision)确认模型支持，再勾选图片输入。选择最多三张 PNG/JPEG，总计不超过 256 KiB，宽高不超过 2048；原图及元数据会发送给提供方、保存到数据库备份并对会话读者可见。开启工作区预算时无法可靠估算图片费用，因此不能发送；费用记录保持未知。历史窗口不再容纳旧图时需重置上下文或新建会话。运行 `python3 tests/image_attachments.py` 和 `node tests/browser/verify_image_attachments.mjs --chromium /usr/bin/chromium` 验证下游原图摘要、权限及重试；本地夹具不是实际商业模型。

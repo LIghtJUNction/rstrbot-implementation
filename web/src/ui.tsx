@@ -12,6 +12,19 @@ export function useText() {
 
 export function catalogErrorMessage(code: string, language: Language): string | undefined {
   const messages: Record<string, [string, string]> = {
+    image_count_limit: ['最多选择三张图片。', 'Select at most three images.'],
+    image_name_invalid: ['图片名称不能包含路径或控制字符，名称最多 255 字节。', 'Image names cannot contain paths or control characters and must be at most 255 bytes.'],
+    image_bytes_limit: ['图片原文件总计不能超过 256 KiB。请缩小图片后重新选择。', 'Original images must total at most 256 KiB. Reduce their size and select them again.'],
+    image_format_unsupported: ['图片内容与扩展名不符，或格式不受支持。请选择 PNG 或 JPEG。', 'Image contents do not match the filename or format. Select PNG or JPEG.'],
+    image_invalid_data: ['图片损坏或无法解码，请换一张图片。', 'The image is damaged or cannot be decoded. Select another image.'],
+    image_saved_corrupt: ['已保存的图片损坏或校验不一致。请核对备份，重置上下文或新建对话。', 'A saved image is damaged or failed its integrity check. Review backups, reset the context, or start a new conversation.'],
+    image_animation_unsupported: ['暂不支持动态 PNG，请选择静态图片。', 'Animated PNG is not supported. Select a still image.'],
+    image_dimensions_limit: ['图片宽高不能超过 2048 像素，且解码资源不能超限。请缩小图片后重试。', 'Image dimensions must not exceed 2048 pixels and decoding must stay within resource limits. Reduce the image and try again.'],
+    image_validation_busy: ['图片校验正忙，请稍后重试。', 'Image validation is busy. Try again shortly.'],
+    image_model_required: ['当前上下文包含图片。请选择已启用图片输入的 OpenAI 兼容模型，或重置上下文。', 'This context contains images. Choose an OpenAI-compatible model configured for image input, or reset the context.'],
+    image_budget_enabled: ['工作区已启用预算，图片费用无法可靠估算，因此不能发送图片。', 'Image cost cannot be estimated reliably while the workspace budget is enabled.'],
+    image_context_limit: ['继续对话会丢掉先前图片。请重置上下文或新建对话。', 'Continuing would omit an earlier image. Reset the context or start a new conversation.'],
+    image_budget_in_flight: ['图片请求仍在进行，费用尚不确定。请等请求结束后再设置预算。', 'An image request with unknown cost is still in progress. Wait for it to finish before setting a budget.'],
     tool_catalog_instance_limit: ['插件实例太多，无法完整检查。请移除不再使用的实例后重试。', 'Too many plugin instances to inspect safely. Remove unused instances and try again.'],
     tool_catalog_package_unavailable: ['启用的插件包不可用。请重新安装插件，或停用对应实例。', 'An enabled plugin package is unavailable. Reinstall it or disable its instance.'],
     tool_catalog_invalid: ['插件返回的工具列表无效。请检查插件配置。', 'A plugin returned an invalid tool list. Check its configuration.'],

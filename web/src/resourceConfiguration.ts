@@ -47,7 +47,8 @@ export function prepareConfiguration({ kind, draft, saved, providers }: {
     const maxTokens = Number(draft.max_tokens);
     if (!model.trim() || bytes(model) > 200) issue('model', '模型 ID 不能为空，且不能超过 200 个 UTF-8 字节。', 'Model ID is required and must be at most 200 UTF-8 bytes.');
     if (!Number.isSafeInteger(maxTokens) || maxTokens < 1 || maxTokens > 32768) issue('max_tokens', '最大输出 token 必须是 1 到 32768 的整数。', 'Maximum output tokens must be an integer from 1 to 32768.');
-    Object.assign(data, { provider, model, max_tokens: maxTokens });
+    if (draft.supports_images === true && provider !== 'openai') issue('supports_images', '图片输入仅支持 OpenAI 兼容提供方。', 'Image input requires the OpenAI-compatible provider.');
+    Object.assign(data, { provider, model, max_tokens: maxTokens, supports_images: draft.supports_images === true });
     if (!diagnostic) data.base_url = url;
     for (const direction of ['input', 'output']) {
       const key = `${direction}_price_usd`;

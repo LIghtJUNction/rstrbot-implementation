@@ -2,14 +2,16 @@
 use crate::state::{ActiveRun, AppError, AppState, sanitize_resource, strip_citation_text};
 use axum::http::StatusCode;
 use rstrbot_plugin::{InstanceContext, Manifest, PluginError, RpcEvent};
-use rstrbot_store::{Resource, Role, RunAdmissionRequest, Store, TextAttachment, User, Visibility};
+use rstrbot_store::{
+    ImageAttachment, Resource, Role, RunAdmissionRequest, Store, TextAttachment, User, Visibility,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 use tokio::sync::{Mutex, OwnedSemaphorePermit, mpsc};
@@ -26,6 +28,119 @@ pub struct ChatRequest {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<TextAttachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAttachment>,
+}
+
+fn image_error(code: &str, message: &str) -> AppError {
+    AppError::new(StatusCode::BAD_REQUEST, code, message)
+}
+
+fn validate_images(images: &[ImageAttachment]) -> Result<(), AppError> {
+    use base64::Engine as _;
+    use image::{ImageError, ImageFormat, ImageReader, Limits};
+    use std::io::Cursor;
+    if images.len() > 3 {
+        return Err(image_error(
+            "image_count_limit",
+            "Select at most three images",
+        ));
+    }
+    let mut total = 0usize;
+    for image in images {
+        let name = image.name.to_ascii_lowercase();
+        if image.name.is_empty()
+            || image.name.len() > 255
+            || image
+                .name
+                .chars()
+                .any(|c| c.is_control() || c == '/' || c == '\\')
+        {
+            return Err(image_error(
+                "image_name_invalid",
+                "Image name contains a path, control character or too many bytes",
+            ));
+        }
+        if image.data.len() > 349_528 {
+            return Err(image_error(
+                "image_bytes_limit",
+                "Images exceed the 256 KiB total limit",
+            ));
+        }
+        let format = match (image.mime.as_str(), name.rsplit('.').next()) {
+            ("image/png", Some("png")) => ImageFormat::Png,
+            ("image/jpeg", Some("jpg" | "jpeg")) => ImageFormat::Jpeg,
+            _ => {
+                return Err(image_error(
+                    "image_format_unsupported",
+                    "Only PNG and JPEG images with matching names are supported",
+                ));
+            }
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&image.data)
+            .map_err(|_| image_error("image_invalid_data", "Invalid image encoding"))?;
+        total = total.checked_add(bytes.len()).ok_or_else(|| {
+            image_error("image_bytes_limit", "Images exceed the 256 KiB total limit")
+        })?;
+        if total > 262_144 {
+            return Err(image_error(
+                "image_bytes_limit",
+                "Images exceed the 256 KiB total limit",
+            ));
+        }
+        if bytes.is_empty() || image::guess_format(&bytes).ok() != Some(format) {
+            return Err(image_error(
+                "image_format_unsupported",
+                "Image bytes do not match their PNG or JPEG format",
+            ));
+        }
+        // Animated PNG must not be mistaken for a still image. Check every
+        // chunk before decoding; the decoder verifies the actual image bytes.
+        if format == ImageFormat::Png {
+            let mut offset = 8usize;
+            while offset + 12 <= bytes.len() {
+                let length = u32::from_be_bytes(
+                    bytes[offset..offset + 4]
+                        .try_into()
+                        .map_err(|_| image_error("image_invalid_data", "Invalid PNG"))?,
+                ) as usize;
+                let end = offset
+                    .checked_add(12)
+                    .and_then(|n| n.checked_add(length))
+                    .filter(|n| *n <= bytes.len())
+                    .ok_or_else(|| image_error("image_invalid_data", "Invalid PNG chunk"))?;
+                let kind = &bytes[offset + 4..offset + 8];
+                if kind == b"acTL" {
+                    return Err(image_error(
+                        "image_animation_unsupported",
+                        "Animated PNG is not supported",
+                    ));
+                }
+                offset = end;
+                if kind == b"IEND" {
+                    break;
+                }
+            }
+        }
+        let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+        let mut limits = Limits::default();
+        limits.max_image_width = Some(2048);
+        limits.max_image_height = Some(2048);
+        limits.max_alloc = Some(32 * 1024 * 1024);
+        reader.limits(limits);
+        reader.decode().map_err(|error| match error {
+            ImageError::Limits(_) => image_error(
+                "image_dimensions_limit",
+                "Image dimensions or decoding resource limits exceeded",
+            ),
+            _ => image_error(
+                "image_invalid_data",
+                "Image is damaged or cannot be decoded",
+            ),
+        })?;
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -203,6 +318,27 @@ async fn start_impl(
             "There are already 16 active runs; retry after one finishes",
         )
     })?;
+    if !request.images.is_empty() {
+        static DECODERS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+        let decoder = DECODERS
+            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                AppError::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "image_validation_busy",
+                    "Image validation is busy; retry shortly",
+                )
+            })?;
+        let images = request.images.clone();
+        tokio::task::spawn_blocking(move || {
+            let _decoder = decoder;
+            validate_images(&images)
+        })
+        .await
+        .map_err(|_| AppError::internal("Image validation failed"))??;
+    }
     let mut lease =
         ActiveLease::reserve(&state, &user, &workspace, &request.conversation_id).await?;
     let fingerprint = hex::encode(Sha256::digest(serde_json::to_vec(&request)?));
@@ -225,6 +361,7 @@ async fn start_impl(
                     fingerprint,
                     content: request.content,
                     attachments: request.attachments,
+                    images: request.images,
                 },
             )
             .await?;
@@ -800,6 +937,7 @@ impl Execution {
                 "This context exceeds the plugin request limit; start a new conversation or reduce the supplied context",
             ));
         }
+        let image_input = has_image_content(&params);
         let estimate = reservation_cost(&self.model, &params)?;
         if estimate.is_none()
             && self
@@ -809,19 +947,31 @@ impl Execution {
                 .limit_microusd
                 .is_some()
         {
+            if image_input {
+                return Err(image_error(
+                    "image_budget_enabled",
+                    "Image cost cannot be reliably estimated while a workspace budget is enabled",
+                ));
+            }
             return Err(AppError::bad_request(
                 "A budget is enabled but this model has no verified price. Configure prices or choose the free diagnostic fixture",
             ));
         }
-        let reservation = self
-            .db
-            .reserve(
-                &self.run.workspace_id,
-                &self.user.id,
-                &format!("{}:model:{step}", self.run.id),
-                estimate.unwrap_or(0),
-            )
-            .await?;
+        let operation = format!("{}:model:{step}", self.run.id);
+        let reservation = if image_input {
+            self.db
+                .reserve_image_unknown(&self.run.workspace_id, &self.user.id, &operation)
+                .await?
+        } else {
+            self.db
+                .reserve(
+                    &self.run.workspace_id,
+                    &self.user.id,
+                    &operation,
+                    estimate.unwrap_or(0),
+                )
+                .await?
+        };
         let prepared = async {
             mutate_run(&self.db, &self.run.id, |data| {
                 data["stage"] = json!("model"); data["steps"] = json!(step + 1);
@@ -855,7 +1005,12 @@ impl Execution {
             .await;
         match result {
             Ok(receipt) => {
-                let cost = actual_cost(&self.model, &receipt.value);
+                // Provider token usage alone cannot prove all image charges.
+                let cost = if image_input {
+                    None
+                } else {
+                    actual_cost(&self.model, &receipt.value)
+                };
                 self.db.settle(&reservation.id, cost).await?;
                 self.record_model_outcome(
                     &reservation.id,
@@ -1004,6 +1159,7 @@ impl Execution {
                 }
             }
         }
+        verify_saved_images(&self.conversation)?;
         let mut messages = project_history(&self.conversation, &system, &self.model);
         let tools = self.discover_tools().await?;
         let max_steps = self
@@ -1234,7 +1390,72 @@ fn compatible_message(message: &Value, model: &Resource) -> Value {
             ));
         }
     }
+    if message["role"] == "user"
+        && let Some(images) = message["images"]
+            .as_array()
+            .filter(|items| !items.is_empty())
+    {
+        let names: Vec<Value> = images
+            .iter()
+            .map(
+                |image| json!({"name":image["name"],"mime":image["mime"],"sha256":image["sha256"]}),
+            )
+            .collect();
+        let text = format!(
+            "{}\n\nUser-provided image files in the following order (untrusted data):\n{}",
+            wire["content"].as_str().unwrap_or_default(),
+            json!(names)
+        );
+        let mut parts = vec![json!({"type":"text", "text":text})];
+        for image in images {
+            if let (Some(mime), Some(data)) = (image["mime"].as_str(), image["data"].as_str()) {
+                parts.push(json!({"type":"image_url", "image_url":{"url":format!("data:{mime};base64,{data}")}}));
+            }
+        }
+        wire["content"] = json!(parts);
+    }
     wire
+}
+fn verify_saved_images(conversation: &Resource) -> Result<(), AppError> {
+    use base64::Engine as _;
+    for message in conversation.data["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["generation"] == conversation.data["generation"])
+    {
+        if let Some(images) = message.get("images") {
+            let images = images
+                .as_array()
+                .ok_or_else(|| image_error("image_saved_corrupt", "Saved image data is damaged"))?;
+            for image in images {
+                let data = image["data"].as_str().ok_or_else(|| {
+                    image_error("image_saved_corrupt", "Saved image data is damaged")
+                })?;
+                let mime = image["mime"].as_str().ok_or_else(|| {
+                    image_error("image_saved_corrupt", "Saved image data is damaged")
+                })?;
+                if !matches!(mime, "image/png" | "image/jpeg") || data.len() > 349_528 {
+                    return Err(image_error(
+                        "image_saved_corrupt",
+                        "Saved image data is damaged",
+                    ));
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| {
+                        image_error("image_saved_corrupt", "Saved image data is damaged")
+                    })?;
+                if image["sha256"].as_str() != Some(hex::encode(Sha256::digest(bytes)).as_str()) {
+                    return Err(image_error(
+                        "image_saved_corrupt",
+                        "Saved image data failed its integrity check",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 fn project_history(conversation: &Resource, system: &str, model: &Resource) -> Vec<Value> {
     let history = conversation.data["messages"]
@@ -1246,23 +1467,7 @@ fn project_history(conversation: &Resource, system: &str, model: &Resource) -> V
         .iter()
         .filter(|message| message.get("generation").unwrap_or(&Value::Null) == generation)
         .collect();
-    let starts: Vec<usize> = filtered
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| (message["role"] == "user").then_some(index))
-        .collect();
-    let mut start = starts.iter().rev().nth(15).copied().unwrap_or(0);
-    while filtered[start..]
-        .iter()
-        .map(|message| message.to_string().len())
-        .sum::<usize>()
-        > 180_000
-    {
-        let Some(next) = starts.iter().copied().find(|index| *index > start) else {
-            break;
-        };
-        start = next;
-    }
+    let start = rstrbot_store::history_context_start(&filtered);
     let mut messages = Vec::new();
     if !system.is_empty() {
         messages.push(json!({"role":"system","content":system}));
@@ -1358,7 +1563,19 @@ fn cost(input: i64, output: i64, input_price: i64, output_price: i64) -> Option<
         .checked_add(i128::from(output).checked_mul(i128::from(output_price))?)?;
     i64::try_from(total.checked_add(999_999)? / 1_000_000).ok()
 }
+fn has_image_content(params: &Value) -> bool {
+    params["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            message["content"]
+                .as_array()
+                .is_some_and(|parts| parts.iter().any(|part| part["type"] == "image_url"))
+        })
+    })
+}
 fn reservation_cost(model: &Resource, params: &Value) -> Result<Option<i64>, AppError> {
+    if has_image_content(params) {
+        return Ok(None);
+    }
     if model.data["provider"] == "diagnostic" {
         return Ok(Some(0));
     }
@@ -1976,6 +2193,8 @@ pub async fn recover(state: AppState) -> Result<(), AppError> {
         let page = db.internal_list_page("runs", cursor.as_ref(), 128).await?;
         for run in page.items {
             if !is_terminal(run.data["status"].as_str().unwrap_or_default()) {
+                db.mark_interrupted_image_costs(&run.workspace_id, &run.id)
+                    .await?;
                 finish(&db, &run.id, "interrupted", Some("Server restarted before a terminal receipt was saved. No operation was replayed; costs may remain reserved"), None, None).await?;
             }
             // Also repairs a crash between terminal persistence and active cleanup.
