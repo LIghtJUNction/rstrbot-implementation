@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "checked_at": "2026-10-29",
+  "test": "python3 tests/image_attachments.py",
+  "database": "temporary isolated SQLite",
+  "provider": "loopback OpenAI-compatible fake receiver; no commercial provider",
+  "checks": [
+    {
+      "name": "invalid image, unsupported model, and ordinary chat endpoints reject before writes or model dispatch",
+      "status": "passed"
+    },
+    {
+      "name": "bounded workspace budget blocks uncertain image cost before admission",
+      "status": "passed"
+    },
+    {
+      "name": "budget cannot be enabled while an image request is in flight; image cost remains unknown",
+      "status": "passed"
+    },
+    {
+      "name": "provider received original PNG and JPEG bytes, typed text and text attachment; same intent replays without a second call",
+      "status": "passed"
+    },
+    {
+      "name": "private images survive restart, stay denied to another member, and are not silently omitted when changing models",
+      "status": "passed"
+    },
+    {
+      "name": "history limit refuses to drop an earlier image instead of silently losing context",
+      "status": "passed"
+    },
+    {
+      "name": "shared images are visible to members and denied after membership revocation",
+      "status": "passed"
+    },
+    {
+      "name": "reservation API exposes stable pages, total count and continuation",
+      "status": "passed"
+    },
+    {
+      "name": "unknown image cost is admin-reported, idempotent, correctable by CAS and never replays the model",
+      "status": "passed"
+    },
+    {
+      "name": "SQLite backup and isolated restore preserve image bytes, hashes and reconciliation ledger",
+      "status": "passed"
+    }
+  ]
+}

@@ -730,6 +730,353 @@ async fn actual_cost_over_reservation_is_recorded_as_debt() {
 }
 
 #[tokio::test]
+async fn unknown_cost_reconciliation_is_serialized_redacted_and_backed_up() {
+    let (store, alice, workspace, _dir) = initialized().await;
+    let admin = store
+        .create_user(&alice, "cost_admin", PASSWORD)
+        .await
+        .unwrap();
+    let member = store
+        .create_user(&alice, "cost_member", PASSWORD)
+        .await
+        .unwrap();
+    store
+        .set_member(&workspace, &alice.id, &admin.id, Role::Admin)
+        .await
+        .unwrap();
+    store
+        .set_member(&workspace, &alice.id, &member.id, Role::Member)
+        .await
+        .unwrap();
+
+    let in_flight = store
+        .reserve(&workspace, &alice.id, "in-flight-cost", 20)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.reservations(&workspace, &member.id, 0, 100).await,
+        Err(Error::Forbidden)
+    ));
+    let second_reservation = store
+        .reserve(&workspace, &alice.id, "reservation-page-test", 0)
+        .await
+        .unwrap();
+    let first_page = store
+        .reservations(&workspace, &alice.id, 0, 1)
+        .await
+        .unwrap();
+    let second_page = store
+        .reservations(&workspace, &alice.id, 1, 1)
+        .await
+        .unwrap();
+    assert_eq!(first_page.total, 2);
+    assert_eq!(first_page.items.len(), 1);
+    assert!(first_page.has_more);
+    assert_eq!(second_page.items.len(), 1);
+    assert!(!second_page.has_more);
+    assert_ne!(first_page.items[0].id, second_page.items[0].id);
+    store.settle(&second_reservation.id, Some(0)).await.unwrap();
+    assert!(matches!(
+        store
+            .reconcile_reservation(&workspace, &in_flight.id, &alice.id, 0, 10, "invoice", true,)
+            .await,
+        Err(Error::Conflict)
+    ));
+    store.settle(&in_flight.id, None).await.unwrap();
+
+    assert!(matches!(
+        store
+            .reconcile_reservation(
+                &workspace,
+                &in_flight.id,
+                &member.id,
+                0,
+                10,
+                "invoice",
+                true,
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
+    for (amount, source, confirmed) in [
+        (-1, "invoice", true),
+        (10, "other", true),
+        (10, "invoice", false),
+    ] {
+        assert!(matches!(
+            store
+                .reconcile_reservation(
+                    &workspace,
+                    &in_flight.id,
+                    &alice.id,
+                    0,
+                    amount,
+                    source,
+                    confirmed,
+                )
+                .await,
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    let left_store = store.clone();
+    let left_workspace = workspace.clone();
+    let left_id = in_flight.id.clone();
+    let left_user = alice.id.clone();
+    let left = tokio::spawn(async move {
+        left_store
+            .reconcile_reservation(
+                &left_workspace,
+                &left_id,
+                &left_user,
+                0,
+                13,
+                "invoice",
+                true,
+            )
+            .await
+    });
+    let right_store = store.clone();
+    let right_workspace = workspace.clone();
+    let right_id = in_flight.id.clone();
+    let right_user = alice.id.clone();
+    let right = tokio::spawn(async move {
+        right_store
+            .reconcile_reservation(
+                &right_workspace,
+                &right_id,
+                &right_user,
+                0,
+                13,
+                "invoice",
+                true,
+            )
+            .await
+    });
+    assert!(left.await.unwrap().is_ok());
+    assert!(right.await.unwrap().is_ok());
+    let budget = store.budget(&workspace, &alice.id).await.unwrap();
+    assert_eq!(budget.spent_microusd, 13);
+    assert_eq!(budget.reserved_microusd, 0);
+    assert_eq!(budget.unknown_reservations, 0);
+    assert_eq!(
+        store
+            .reservation_reconciliations(&workspace, &in_flight.id, &alice.id, 0, 100)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "identical concurrent retry appends one revision"
+    );
+    assert!(matches!(
+        store
+            .reconcile_reservation(&workspace, &in_flight.id, &admin.id, 0, 14, "invoice", true,)
+            .await,
+        Err(Error::Conflict)
+    ));
+
+    store
+        .reconcile_reservation(
+            &workspace,
+            &in_flight.id,
+            &admin.id,
+            1,
+            4,
+            "provider_adjustment",
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .budget(&workspace, &alice.id)
+            .await
+            .unwrap()
+            .spent_microusd,
+        4,
+        "correction updates the ledger by the difference"
+    );
+    let history = store
+        .reservation_reconciliations(&workspace, &in_flight.id, &alice.id, 0, 100)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].old_microusd, None);
+    assert_eq!(history[0].actual_microusd, 13);
+    assert_eq!(history[1].old_microusd, Some(13));
+    assert_eq!(history[1].actual_microusd, 4);
+    assert_eq!(history[1].performed_by, admin.id);
+    let history_first = store
+        .reservation_reconciliations(&workspace, &in_flight.id, &alice.id, 0, 1)
+        .await
+        .unwrap();
+    let history_second = store
+        .reservation_reconciliations(&workspace, &in_flight.id, &alice.id, history_first[0].id, 1)
+        .await
+        .unwrap();
+    assert_eq!(history_first.len(), 1);
+    assert_eq!(history_second.len(), 1);
+    assert!(history_second[0].id > history_first[0].id);
+
+    let events = store.events(&workspace, &member.id, 0, 100).await.unwrap();
+    let cost_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind.starts_with("budget.reservation."))
+        .collect();
+    assert_eq!(cost_events.len(), 2);
+    assert!(cost_events.iter().all(|event| event.data.is_null()));
+    assert!(matches!(
+        store
+            .reservation_reconciliations(&workspace, &in_flight.id, &member.id, 0, 100)
+            .await,
+        Err(Error::Forbidden)
+    ));
+
+    let backup = store.export_backup(&alice).await.unwrap();
+    let (restored, _restored_dir) = database().await;
+    restored.import_backup(&backup).await.unwrap();
+    assert_eq!(
+        restored
+            .reservation_reconciliations(&workspace, &in_flight.id, &alice.id, 0, 100)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        restored
+            .budget(&workspace, &alice.id)
+            .await
+            .unwrap()
+            .spent_microusd,
+        4
+    );
+    let other_workspace = store
+        .create_workspace(&alice.id, "Another workspace")
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .reservation_reconciliations(&other_workspace.id, &in_flight.id, &alice.id, 0, 100,)
+            .await,
+        Err(Error::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn different_admin_reconciliations_and_budget_updates_share_workspace_lock() {
+    let (store, alice, workspace, _dir) = initialized().await;
+    let admin = store
+        .create_user(&alice, "race_admin", PASSWORD)
+        .await
+        .unwrap();
+    store
+        .set_member(&workspace, &alice.id, &admin.id, Role::Admin)
+        .await
+        .unwrap();
+    let contested = store
+        .reserve(&workspace, &alice.id, "contested", 0)
+        .await
+        .unwrap();
+    store.settle(&contested.id, None).await.unwrap();
+
+    let left_store = store.clone();
+    let left_workspace = workspace.clone();
+    let left_id = contested.id.clone();
+    let left_user = alice.id.clone();
+    let left = tokio::spawn(async move {
+        left_store
+            .reconcile_reservation(
+                &left_workspace,
+                &left_id,
+                &left_user,
+                0,
+                13,
+                "invoice",
+                true,
+            )
+            .await
+    });
+    let right_store = store.clone();
+    let right_workspace = workspace.clone();
+    let right_id = contested.id.clone();
+    let right_user = admin.id.clone();
+    let right = tokio::spawn(async move {
+        right_store
+            .reconcile_reservation(
+                &right_workspace,
+                &right_id,
+                &right_user,
+                0,
+                17,
+                "usage_receipt",
+                true,
+            )
+            .await
+    });
+    let results = [left.await.unwrap(), right.await.unwrap()];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result.as_ref(), Err(Error::Conflict)))
+            .count(),
+        1
+    );
+    let reconciled = store
+        .reservation_reconciliations(&workspace, &contested.id, &alice.id, 0, 100)
+        .await
+        .unwrap();
+    assert_eq!(reconciled.len(), 1);
+    assert!(matches!(reconciled[0].actual_microusd, 13 | 17));
+    assert_eq!(
+        store
+            .budget(&workspace, &alice.id)
+            .await
+            .unwrap()
+            .spent_microusd,
+        reconciled[0].actual_microusd
+    );
+
+    let budget_race = store
+        .reserve(&workspace, &alice.id, "budget-race", 0)
+        .await
+        .unwrap();
+    store.settle(&budget_race.id, None).await.unwrap();
+    let budget_store = store.clone();
+    let budget_workspace = workspace.clone();
+    let budget_user = alice.id.clone();
+    let change_budget = tokio::spawn(async move {
+        budget_store
+            .set_budget(&budget_workspace, &budget_user, Some(500))
+            .await
+    });
+    let reconcile_store = store.clone();
+    let reconcile_workspace = workspace.clone();
+    let reconcile_id = budget_race.id.clone();
+    let reconcile_user = admin.id.clone();
+    let reconcile = tokio::spawn(async move {
+        reconcile_store
+            .reconcile_reservation(
+                &reconcile_workspace,
+                &reconcile_id,
+                &reconcile_user,
+                0,
+                60,
+                "invoice",
+                true,
+            )
+            .await
+    });
+    change_budget.await.unwrap().unwrap();
+    reconcile.await.unwrap().unwrap();
+    let budget = store.budget(&workspace, &alice.id).await.unwrap();
+    assert_eq!(budget.limit_microusd, Some(500));
+    assert_eq!(budget.spent_microusd, reconciled[0].actual_microusd + 60);
+    assert_eq!(budget.unknown_reservations, 0);
+}
+
+#[tokio::test]
 async fn idempotency_preserves_unknown_intent_and_compares_fingerprint() {
     let (store, alice, workspace, _dir) = initialized().await;
     assert_eq!(

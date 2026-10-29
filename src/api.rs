@@ -117,6 +117,14 @@ pub fn router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/workspaces/{wid}/audit", get(audit))
         .route("/workspaces/{wid}/budget", get(budget).put(set_budget))
         .route("/workspaces/{wid}/reservations", get(reservations))
+        .route(
+            "/workspaces/{wid}/reservations/{id}/reconcile",
+            post(reconcile_reservation),
+        )
+        .route(
+            "/workspaces/{wid}/reservations/{id}/reconciliations",
+            get(reservation_reconciliations),
+        )
         .route("/workspaces/{wid}/export", get(export_workspace))
         .route("/openapi.json", get(openapi))
         .fallback(api_not_found)
@@ -1191,11 +1199,69 @@ async fn reservations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(wid): Path<String>,
+    Query(page): Query<PageQuery>,
 ) -> ApiResult<Json<Value>> {
     let user = actor(&state, &headers).await?;
-    Ok(Json(
-        json!({"items":state.store().await.reservations(&wid,&user.id).await?}),
-    ))
+    Ok(Json(serde_json::to_value(
+        state
+            .store()
+            .await
+            .reservations(
+                &wid,
+                &user.id,
+                page.offset.unwrap_or(0),
+                page.limit.unwrap_or(100),
+            )
+            .await?,
+    )?))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReconcileReservationInput {
+    expected_revision: i64,
+    actual_microusd: i64,
+    source: String,
+    confirm_reported_cost: bool,
+}
+async fn reconcile_reservation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((wid, id)): Path<(String, String)>,
+    Payload(body): Payload<ReconcileReservationInput>,
+) -> ApiResult<Json<Value>> {
+    let user = actor(&state, &headers).await?;
+    Ok(Json(serde_json::to_value(
+        state
+            .store()
+            .await
+            .reconcile_reservation(
+                &wid,
+                &id,
+                &user.id,
+                body.expected_revision,
+                body.actual_microusd,
+                &body.source,
+                body.confirm_reported_cost,
+            )
+            .await?,
+    )?))
+}
+async fn reservation_reconciliations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((wid, id)): Path<(String, String)>,
+    Query(page): Query<PageQuery>,
+) -> ApiResult<Json<Value>> {
+    let user = actor(&state, &headers).await?;
+    Ok(Json(json!({
+        "items": state.store().await.reservation_reconciliations(
+            &wid,
+            &id,
+            &user.id,
+            page.after.unwrap_or(0),
+            page.limit.unwrap_or(100),
+        ).await?
+    })))
 }
 async fn export_workspace(
     State(state): State<AppState>,

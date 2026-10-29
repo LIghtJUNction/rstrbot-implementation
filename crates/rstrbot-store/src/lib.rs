@@ -262,6 +262,37 @@ pub struct Reservation {
     pub state: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReservationSummary {
+    #[serde(flatten)]
+    pub reservation: Reservation,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub reconciliation_revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReservationPage {
+    pub items: Vec<ReservationSummary>,
+    pub offset: i64,
+    pub limit: i64,
+    pub total: i64,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetReconciliation {
+    pub id: i64,
+    pub reservation_id: String,
+    pub revision: i64,
+    pub expected_revision: i64,
+    pub old_microusd: Option<i64>,
+    pub actual_microusd: i64,
+    pub source: String,
+    pub performed_by: String,
+    pub created_at: i64,
+}
+
 #[derive(Clone)]
 pub struct Store {
     pool: AnyPool,

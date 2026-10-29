@@ -111,9 +111,29 @@ schema("Budget", obj({"workspace_id": ID, "limit_microusd": nullable(MONEY), "sp
     "reserved_microusd": MONEY, "unknown_reservations": integer(minimum=0)},
     ["workspace_id", "limit_microusd", "spent_microusd", "reserved_microusd", "unknown_reservations"]))
 schema("Reservation", obj({"id": ID, "workspace_id": ID, "operation_id": string(), "amount_microusd": MONEY,
-    "actual_microusd": nullable(MONEY), "state": string(enum=["reserved", "settled", "unknown"])},
-    ["id", "workspace_id", "operation_id", "amount_microusd", "actual_microusd", "state"]))
-collection("ReservationList", ref("Reservation"), maxItems=500)
+    "actual_microusd": nullable(MONEY), "state": string(enum=["reserved", "settled", "unknown"]),
+    "created_at": TIME, "updated_at": TIME, "reconciliation_revision": integer(minimum=0)},
+    ["id", "workspace_id", "operation_id", "amount_microusd", "actual_microusd", "state", "created_at", "updated_at", "reconciliation_revision"]))
+schema("ReservationList", obj({
+    "items": array(ref("Reservation"), maxItems=500),
+    "offset": integer(minimum=0),
+    "limit": integer(minimum=1, maximum=500),
+    "total": integer(minimum=0),
+    "has_more": BOOL,
+}, ["items", "offset", "limit", "total", "has_more"]))
+schema("ReconcileReservationInput", obj({
+    "expected_revision": integer(minimum=0),
+    "actual_microusd": integer("Exact nonnegative integer micro-USD, capped at 2^53-1 for lossless browser JSON handling.", minimum=0, maximum=9007199254740991),
+    "source": string(enum=["usage_dashboard", "invoice", "usage_receipt", "provider_adjustment"]),
+    "confirm_reported_cost": {"const": True},
+}, ["expected_revision", "actual_microusd", "source", "confirm_reported_cost"], True))
+schema("BudgetReconciliation", obj({
+    "id": integer(minimum=1), "reservation_id": ID, "revision": integer(minimum=1),
+    "expected_revision": integer(minimum=0), "old_microusd": nullable(MONEY),
+    "actual_microusd": MONEY, "source": string(enum=["usage_dashboard", "invoice", "usage_receipt", "provider_adjustment"]),
+    "performed_by": ID, "created_at": TIME,
+}, ["id", "reservation_id", "revision", "expected_revision", "old_microusd", "actual_microusd", "source", "performed_by", "created_at"]))
+collection("BudgetReconciliationList", ref("BudgetReconciliation"), maxItems=500)
 
 schema("LoginInput", obj({"username": text(254, "Local username or explicitly verified email; trimmed and lowercased by the server."),
     "password": text(1024, "Existing account password.") | {"format": "password", "writeOnly": True}}, ["username", "password"], True))
@@ -388,6 +408,8 @@ PARAMETERS = {
     "Origin": {"name": "Origin", "in": "header", "required": False, "schema": string(),
         "description": "If present on a mutation, its origin must match Host using the Origin scheme. cross-site Sec-Fetch-Site is always rejected. Setup/login omit bearer token from JSON exactly when this header is present."},
     "ListLimit": {"name": "limit", "in": "query", "required": False, "schema": integer(default=200), "description": "Server clamps to 1–500; values outside that interval are not rejected.", "x-server-clamp": [1, 500]},
+    "ReservationLimit": {"name": "limit", "in": "query", "required": False, "schema": integer(default=100), "description": "Reservation page size; server clamps to 1–500.", "x-server-clamp": [1, 500]},
+    "ReservationOffset": {"name": "offset", "in": "query", "required": False, "schema": integer(minimum=0), "description": "Zero-based reservation offset; negative values are clamped to zero."},
     "Offset": {"name": "offset", "in": "query", "required": False, "schema": integer(default=0), "description": "Server clamps to 0–10,000,000.", "x-server-clamp": [0, 10000000]},
     "EventLimit": {"name": "limit", "in": "query", "required": False, "schema": integer(default=100), "description": "Server clamps to 1–500.", "x-server-clamp": [1, 500]},
     "After": {"name": "after", "in": "query", "required": False, "schema": integer(default=0), "description": "Exclusive durable event ID; negative values are clamped to zero."},
@@ -566,7 +588,9 @@ operation("/workspaces/{wid}/events", "get", "events", "Replay authorized durabl
 operation("/workspaces/{wid}/audit", "get", "audit", "Read authorized audit metadata", "Workspace admin minimum. Same current private-resource filtering as events; every data payload is null, so private message content is not leaked through audit. No cursor field; continue after last returned event ID.", "AuditPage", tag="Events", query=["After", "EventLimit"], example={"items": []})
 operation("/workspaces/{wid}/budget", "get", "budget", "Read current durable budget totals", "Current workspace membership required. Unknown reservations remain reserved; a null limit means unlimited, not zero cost.", "Budget", tag="Budget", errors=["404"], example=budget_example)
 operation("/workspaces/{wid}/budget", "put", "set_budget", "Set or clear the workspace budget limit", "Workspace admin minimum. Null or omitted limit clears the cap. Configured prices and byte-based preflight estimates do not guarantee an absolute external supplier bill ceiling; actual/unknown costs are preserved honestly.", "Budget", "BudgetInput", tag="Budget", errors=["404"], example=budget_example | {"limit_microusd": 5000000}, request_examples={"limit": {"limit_microusd": 5000000}, "unlimited": {"limit_microusd": None}})
-operation("/workspaces/{wid}/reservations", "get", "reservations", "Inspect recent budget reservations", "Workspace admin minimum; up to 500 reservations ordered newest first. No settlement/reconciliation mutation is exposed by this endpoint.", "ReservationList", tag="Budget", example={"items": []})
+operation("/workspaces/{wid}/reservations", "get", "reservations", "Inspect budget reservations", "Workspace admin minimum. Returns a stable newest-first offset page, total count, and has_more so every reservation can be inspected beyond one page. Reconciliation revision is the number of append-only administrator reports.", "ReservationList", query=["ReservationLimit", "ReservationOffset"], tag="Budget", example={"items": [], "offset": 0, "limit": 100, "total": 0, "has_more": False})
+operation("/workspaces/{wid}/reservations/{id}/reconcile", "post", "reconcile_reservation", "Report or correct an unknown model cost", "Current workspace owner/admin is checked inside the budget transaction. Initial revision 0 only accepts unknown reservations; later writes require the current revision and append a correction. Same administrator and identical latest payload after a lost response is idempotent; stale/conflicting payloads return 409. Records the administrator's report, not provider verification. No provider call or model replay occurs; actual charges are recorded even above the budget limit.", "Reservation", "ReconcileReservationInput", tag="Budget", errors=["404", "409"], example={"id": rid, "workspace_id": wid, "operation_id": "example-run:model:1", "amount_microusd": 0, "actual_microusd": 18000, "state": "settled", "created_at": 1792800000, "updated_at": 1792800001, "reconciliation_revision": 1}, request_examples={"first_report": {"expected_revision": 0, "actual_microusd": 18000, "source": "usage_dashboard", "confirm_reported_cost": True}})
+operation("/workspaces/{wid}/reservations/{id}/reconciliations", "get", "reservation_reconciliations", "Read administrator-reported cost history", "Owner/admin only. Uses current membership and verifies the reservation belongs to this workspace. Returns append-only report/correction revisions with prior/current amount, selected source, actor ID and timestamp. This is audit data and does not establish provider verification.", "BudgetReconciliationList", tag="Budget", query=["After", "EventLimit"], errors=["404"], example={"items": []})
 operation("/workspaces/{wid}/export", "get", "export_workspace", "Export only caller-visible sanitized resources", "Current membership required. Covers all implemented resource kinds. Bound 16 MiB/10,000 rows; larger export fails explicitly. This sequential ACL-filtered export is not a consistent disaster-recovery snapshot.", "VisibleExport", tag="Workspaces", errors=["413"], example={"format": "rstrbot-visible-resources-v1", "workspace_id": wid, "exported_by": uid, "created_at": 1792800000, "resources": [], "consistent_snapshot": False})
 operation("/openapi.json", "get", "openapi", "Read the OpenAPI document", "Public API contract/discovery. For older binaries, compare the returned document with the version distributed in docs/openapi.json; a newer source file does not retrofit an already running binary.", "OpenApiDocument", public=True, tag="Discovery")
 operation("/health/live", "get", "live", "Read process liveness", "Public process liveness; does not test storage or providers.", "Liveness", public=True, tag="Health", example={"status": "ok", "version": VERSION})

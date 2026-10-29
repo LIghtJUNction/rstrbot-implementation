@@ -162,12 +162,41 @@ def main():
                 recovered_run = alice.get(base + '/runs/' + interrupted['run']['id'])
                 assert recovered_run['data']['status'] == 'interrupted', recovered_run
                 ledger = alice.get(base + '/reservations')['items']
+                first_page = alice.get(base + '/reservations?limit=1&offset=0')
+                assert first_page['limit'] == 1 and first_page['total'] > 1 and first_page['has_more']
+                second_page = alice.get(base + '/reservations?limit=1&offset=1')
+                assert len(first_page['items']) == len(second_page['items']) == 1
+                assert first_page['items'][0]['id'] != second_page['items'][0]['id']
+                checks.append('reservation API exposes stable pages, total count and continuation')
                 row = next(item for item in ledger if item['operation_id'].startswith(interrupted['run']['id'] + ':model:'))
                 assert row['state'] == 'unknown', row
+                history_path = base + '/reservations/' + row['id'] + '/reconciliations'
+                reconcile_path = base + '/reservations/' + row['id'] + '/reconcile'
+                report = {'expected_revision': 0, 'actual_microusd': 4200, 'source': 'usage_dashboard', 'confirm_reported_cost': True}
+                before = alice.get(base + '/budget')
+                bob.get(history_path, expect=(403, 404))
+                alice.post(reconcile_path, dict(report, actual_microusd=-1), expect=(400,))
+                alice.post(reconcile_path, dict(report, source='freeform'), expect=(400,))
+                alice.post(reconcile_path, dict(report, confirm_reported_cost=False), expect=(400,))
+                alice.post(reconcile_path, dict(report, unknown='must reject'), expect=(422,))
+                assert alice.get(base + '/budget') == before
+                first = alice.post(reconcile_path, report)
+                assert first['state'] == 'settled' and first['actual_microusd'] == 4200
+                assert alice.post(reconcile_path, report)['actual_microusd'] == 4200, 'lost-ack retry is idempotent'
+                assert len(alice.get(history_path)['items']) == 1
+                alice.post(reconcile_path, dict(report, actual_microusd=4300), expect=(409,))
+                correction = dict(report, expected_revision=1, actual_microusd=3100, source='provider_adjustment')
+                alice.post(reconcile_path, correction)
+                history = alice.get(history_path)['items']
+                assert len(history) == 2
+                assert history[0]['old_microusd'] is None and history[0]['actual_microusd'] == 4200
+                assert history[1]['old_microusd'] == 4200 and history[1]['actual_microusd'] == 3100
+                assert alice.get(base + '/budget')['spent_microusd'] == before['spent_microusd'] + 3100
+                assert len(Provider.records) == before_crash + 1, 'accounting does not dispatch a model request'
                 alice.request('PUT', base + '/budget', {'limit_microusd': 1000000})
                 assert len(Provider.records) == before_crash + 1
                 alice.request('PUT', base + '/budget', {'limit_microusd': None})
-                checks.append('crashed in-flight image call becomes unknown without replay or permanently blocking budget settings')
+                checks.append('unknown image cost is admin-reported, idempotent, correctable by CAS and never replays the model')
                 instance.stop()
                 snapshot = Path(directory) / 'snapshot.json'
                 instance.maintenance('backup', '--output', str(snapshot))
@@ -179,7 +208,10 @@ def main():
                     restored.start()
                     reader = Client(restored.base); reader.login('image-owner')
                     assert reader.get(base + '/conversations/' + conversation['id'] + '/messages')['items'][0]['images'] == stored
-                    checks.append('SQLite backup and isolated restore preserve original image bytes and hashes')
+                    restored_history = reader.get(history_path)['items']
+                    assert len(restored_history) == 2 and restored_history[1]['actual_microusd'] == 3100
+                    assert reader.get(base + '/budget')['spent_microusd'] == before['spent_microusd'] + 3100
+                    checks.append('SQLite backup and isolated restore preserve image bytes, hashes and reconciliation ledger')
                 finally:
                     restored.stop()
                 print(json.dumps({'status': 'passed', 'checks': checks}, ensure_ascii=False, indent=2))

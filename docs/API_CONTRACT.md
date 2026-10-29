@@ -1,6 +1,6 @@
 # RstrBot HTTP contract — application 0.2.0, API v1
 
-Machine-readable OpenAPI 3.1: `GET /api/v1/openapi.json` and `docs/openapi.json`; covers all 66 API operations plus the two health operations. Router coverage includes the identity, email and provider configuration modules.
+Machine-readable OpenAPI 3.1: `GET /api/v1/openapi.json` and `docs/openapi.json`; covers all 71 API operations plus the two health operations. The 69-operation pre-change baseline is preserved, with two additive reservation-reconciliation operations. Router coverage includes the identity, email and provider configuration modules.
 
 ## Account and authentication additions
 

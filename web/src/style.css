@@ -296,7 +296,7 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 .member-row strong { font-size: 15px; font-weight: 550; }
 .member-row p { font-size: 12px; margin-top: 5px; overflow-wrap: anywhere; }
 .member-row select { width: 150px; font-size: 13px; min-height: 44px; }
-.settings-section { padding: 30px 0; border-top: 1px solid var(--line); }
+.settings-section { padding: 30px 0; }
 .settings-section > header { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; }
 .settings-section > header svg { color: var(--accent); }
 .settings-section h2 { font-size: 21px; }
@@ -310,6 +310,14 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 .budget-values > div { display: flex; flex-direction: column; gap: 12px; }
 .budget-values span { color: var(--muted); font-size: 13px; }
 .budget-values strong { font-size: 24px; letter-spacing: -.04em; font-weight: 450; }
+.reconciliation-list { display: grid; gap: 12px; margin: 20px 0; }
+.reconciliation-list > article { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px 0; }
+.reconciliation-list > article > div { display: grid; gap: 6px; min-width: 0; }
+.reconciliation-list .mono { overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
+.reconciliation-list small, .reconciliation-history small { color: var(--muted); }
+.reconciliation-history { display: grid; gap: 12px; }
+.reconciliation-history h3 { font-size: 15px; }
+.reconciliation-history article { display: grid; gap: 5px; padding: 12px 0; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 22px; }
 .inline-form .field { width: 260px; }
 .audit-list > div { display: grid; grid-template-columns: 140px minmax(100px, 1fr) minmax(100px, 1fr); gap: 20px; border-bottom: 1px solid var(--line); padding: 15px 0; font-size: 13px; }
@@ -723,6 +731,8 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
   .developer-card-grid, .developer-option-list { grid-template-columns: minmax(0, 1fr); }
   .developer-card, .developer-section { padding: 18px; }
   .developer-option-list > div { grid-template-columns: 95px minmax(0, 1fr); }
+  .reconciliation-list > article { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .reconciliation-list > article > .button { width: 100%; }
 }
 @media (max-width: 359px) {
   .developer-card-links { gap: 8px 12px; }

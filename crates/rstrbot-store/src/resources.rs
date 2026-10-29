@@ -623,10 +623,18 @@ impl Store {
         after: i64,
         limit: i64,
     ) -> Result<Vec<Event>> {
-        self.membership(workspace, user).await?;
+        let role = self.require_role(workspace, user, Role::Viewer).await?;
         let rows = sqlx::query("SELECT e.* FROM events e JOIN members m ON m.workspace_id = e.workspace_id AND m.user_id = $2 JOIN users u ON u.id = m.user_id AND u.disabled = 0 WHERE e.workspace_id = $1 AND e.id > $3 AND (e.visibility = 'workspace' OR e.owner_id = $2) ORDER BY e.id LIMIT $4")
             .bind(workspace).bind(user).bind(after.max(0)).bind(limit.clamp(1,500)).fetch_all(&self.pool).await?;
-        rows.iter().map(event_from_row).collect()
+        let mut events: Vec<Event> = rows.iter().map(event_from_row).collect::<Result<_>>()?;
+        if role < Role::Admin {
+            for event in &mut events {
+                if event.kind.starts_with("budget.reservation.") {
+                    event.data = Value::Null;
+                }
+            }
+        }
+        Ok(events)
     }
 
     /// Audit omits event payloads and respects private-resource boundaries.

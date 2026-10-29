@@ -1,0 +1,101 @@
+{
+  "status": "passed",
+  "started_at": "2026-10-29T05:48:00.390Z",
+  "environment": {
+    "os": "linux",
+    "architecture": "x64",
+    "node": "v24.22.1",
+    "playwright": "1.62.1",
+    "browser": "156.0.8078.73",
+    "database": "SQLite",
+    "valkey": "off",
+    "locale": "en-US",
+    "timezone": "Asia/Taipei",
+    "reduced_motion": true
+  },
+  "input_sha256": {
+    "target/debug/rstrbot": "f0464fc81fcd93f2e4e1f32d72102fa420ba4e3b30149e04d34cb0908cb085bb",
+    "target/debug/rstrbot-diagnostic": "484639b2802b6b4723b1b09a5e340406c87fc41a153d72fa91427b8f8ecb38b3",
+    "target/debug/rstrbot-openai": "71e7acc8b8863a90d88acf0838cfaf4dca2dfbf4ed6f97a992e5fed6eec5061b",
+    "target/debug/rstrbot-webhook": "4ba8c33388ba055e5b99cf4853f05add479aa592dcd75580a92a44e13057c43f",
+    "web/dist/assets/index-7odRae25.css": "e99ee5a03daab88bbc37bc82b0e2d5a64f93fa7dec7a07375297f638a2937ad1",
+    "web/dist/assets/index-kFu2J7Ia.js": "8d089602df2993ff9fa1f7644ec58e3f2cccd683b1d0f2c05241d9a3fbeb3a08",
+    "web/dist/assets/index-kFu2J7Ia.js.map": "0fdde9838edb51f13f85f07280170fead355a8f20ced6bbe5cd1510feff30d6c",
+    "web/dist/favicon.svg": "4d5f6708df31528b64652d0ce0224ebba0ad6d108279fb12fd90f4461ccf9c48",
+    "web/dist/index.html": "eb0b37346c6018f2290bab20368cac914c444d5d05488fe1106732b1b357f7d1"
+  },
+  "harness_sha256": "e750f9bdfd23640d70c2c0c0bea61ca0fc39dd68014fd4cc71eda54b44d5cf9d",
+  "checks": [
+    {
+      "name": "320px first-run setup exposes both database choices and prevents an unapplied switch",
+      "status": "passed",
+      "duration_ms": 796
+    },
+    {
+      "name": "actual first-run form creates an authenticated administrator and workspace",
+      "status": "passed",
+      "duration_ms": 1565
+    },
+    {
+      "name": "images and text reach the provider unchanged; old cores and lost acknowledgements are safe",
+      "status": "passed",
+      "duration_ms": 6255
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "docs/evidence/RFB-016/screenshots/00-setup-dark-320.png",
+      "sha256": "9ecbeeb104d96e4e8e3d46544ba0233f858a3761ffdfd18e5b14a6c177fec92f",
+      "bytes": 84042,
+      "viewport": {
+        "width": 320,
+        "height": 900
+      }
+    },
+    {
+      "file": "docs/evidence/RFB-016/screenshots/01-setup-dark-desktop.png",
+      "sha256": "838f0b3baf397053c87c0a4308be0d92d3515f5a90da644c24a736dfa5e4f598",
+      "bytes": 135858,
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    {
+      "file": "docs/evidence/RFB-016/screenshots/image-history-mobile.png",
+      "sha256": "d056452dd0de19954a4fddccbf290b93bee0a6d78dcd9c84d266da0071b6b814",
+      "bytes": 41862,
+      "viewport": {
+        "width": 320,
+        "height": 900
+      }
+    },
+    {
+      "file": "docs/evidence/RFB-016/screenshots/budget-reconciliation-mobile-zh.png",
+      "sha256": "be211d2c76fc8be37277dcb2dccb7766ce8fd6ddcad42dcc51207b92d760f147",
+      "bytes": 60760,
+      "viewport": {
+        "width": 320,
+        "height": 900
+      }
+    },
+    {
+      "file": "docs/evidence/RFB-016/screenshots/budget-reconciliation-form-mobile-zh.png",
+      "sha256": "bad647f823a6677b0719413f6781c5408e85aa6dd889a3334606deed29c1ee23",
+      "bytes": 62304,
+      "viewport": {
+        "width": 320,
+        "height": 900
+      }
+    }
+  ],
+  "console_errors": [],
+  "network_errors": [],
+  "limitations": [
+    "Loopback provider fixture only; no commercial vision model or external account.",
+    "Chromium only. No screen-reader, native desktop, production load or full browser-matrix acceptance.",
+    "List search covers loaded pages; resource pagination uses the existing offset API."
+  ],
+  "finished_at": "2026-10-29T05:48:18.833Z",
+  "inputs_unchanged": true
+}
