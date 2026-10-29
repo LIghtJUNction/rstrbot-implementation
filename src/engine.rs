@@ -1239,7 +1239,7 @@ impl Execution {
                                 data["stage"] = json!("tool")
                             })
                             .await?;
-                            match self.call(&tool.manifest, &instance_context(&tool.instance), "tools.call", json!({"name":tool.name,"arguments":arguments,"config":tool.instance.data["config"]}), Some(&tool.instance), false).await {
+                            match self.call(&tool.manifest, &instance_context(&tool.instance), "tools.call", json!({"name":tool.name,"arguments":arguments,"call_id":id,"config":tool.instance.data["config"]}), Some(&tool.instance), false).await {
                                 Ok(receipt) if receipt.value.to_string().len() <= 65_536 => receipt.value,
                                 Ok(_) => { invalid += 1; json!({"error":"tool_result_exceeds_64kib"}) },
                                 Err(error) if matches!(error.code.as_str(), "cancelled" | "forbidden" | "not_found" | "conflict" | "deadline_exceeded" | "storage_unavailable") => {

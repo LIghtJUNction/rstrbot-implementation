@@ -18,7 +18,7 @@ async def handle(method, params, call):
     if not isinstance(text, str) or len(text.encode()) > 16384:
         raise RpcFailure(-32602, "Invalid text")
     await call.emit("tool.progress", {"stage": "received"})
-    return {"content": text, "effect": "read_only"}
+    return {"content": text, "effect": "read_only", "call_id": params.get("call_id")}
 
 
 plugin = Plugin(("tools",), handle)

@@ -21,7 +21,8 @@ async fn main() {
                     if text.starts_with("/diagnostic/tool ") && params.get("tool_choice").and_then(Value::as_str) != Some("none") {
                         let permitted = params.get("tools").and_then(Value::as_array).and_then(|tools| tools.first()).and_then(|tool| tool.pointer("/function/name")).and_then(Value::as_str);
                         if let Some(name) = permitted {
-                            return Ok(json!({"message":{"role":"assistant","content":null,"tool_calls":[{"id":format!("diag_{}",call.request_id),"type":"function","function":{"name":name,"arguments":json!({"text":text.trim_start_matches("/diagnostic/tool ")}).to_string()}}]},"finish_reason":"tool_calls","usage":null,"fixture":true}));
+                            let call_id = if text == "/diagnostic/tool exactly-32-tools" { "catalog_fixed_tool_call".to_owned() } else { format!("diag_{}",call.request_id) };
+                            return Ok(json!({"message":{"role":"assistant","content":null,"tool_calls":[{"id":call_id,"type":"function","function":{"name":name,"arguments":json!({"text":text.trim_start_matches("/diagnostic/tool ")}).to_string()}}]},"finish_reason":"tool_calls","usage":null,"fixture":true}));
                         }
                     }
                     let content = if last.get("role").and_then(Value::as_str) == Some("tool") {
@@ -41,7 +42,7 @@ async fn main() {
                 if params.get("name").and_then(Value::as_str) != Some("echo") { return Err(RpcFailure::not_found()); }
                 let text = params.pointer("/arguments/text").and_then(Value::as_str).filter(|text| text.len() <= 16384).ok_or_else(|| RpcFailure::invalid("text must be at most 16384 bytes"))?;
                 call.emit("tool.progress", json!({"stage":"received"})).await?;
-                Ok(json!({"content":text,"effect":"read_only"}))
+                Ok(json!({"content":text,"effect":"read_only","call_id":params.get("call_id").cloned().unwrap_or(Value::Null)}))
             },
             _ => Err(RpcFailure::not_found()),
         }

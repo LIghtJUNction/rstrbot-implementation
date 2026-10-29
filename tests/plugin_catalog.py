@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix="rstrbot-tools-probe-") as temp:
             " if method == 'tools.list':\n"
             "  count = params.get('config', {}).get('count', 32)\n"
             "  return {'tools': [{'name': f'tool_{i}', 'effect':'read_only', 'input_schema':{'type':'object'}} for i in range(count)]}\n"
-            " if method == 'tools.call': return {'content':'catalog fixture result', 'effect':'read_only'}\n"
+            " if method == 'tools.call': return {'content':'catalog fixture result', 'effect':'read_only', 'call_id':params.get('call_id')}\n"
             " raise RpcFailure(-32601, 'not found')\n"
             "asyncio.run(serve(Plugin(('tools',), handle)))\n"
         )
@@ -169,6 +169,21 @@ with tempfile.TemporaryDirectory(prefix="rstrbot-tools-probe-") as temp:
             messages = client.get(
                 base + "/conversations/" + conversation["id"] + "/messages"
             )["items"]
+            events = client.get(base + "/events?limit=500")["items"]
+            tool_calls = []
+            for message in messages:
+                if message.get("role") != "tool":
+                    continue
+                try:
+                    worker_result = json.loads(message.get("content", ""))
+                except (TypeError, json.JSONDecodeError):
+                    worker_result = {}
+                tool_calls.append(
+                    {
+                        "history_call_id": message.get("tool_call_id"),
+                        "worker_call_id": worker_result.get("call_id"),
+                    }
+                )
             return {
                 "mode": mode,
                 "status": r["data"]["status"],
@@ -176,6 +191,13 @@ with tempfile.TemporaryDirectory(prefix="rstrbot-tools-probe-") as temp:
                 "error": r["data"].get("error"),
                 "error_code": r["data"].get("error_code"),
                 "tool_results": sum(m.get("role") == "tool" for m in messages),
+                "tool_calls": tool_calls,
+                "tool_event_ids": [
+                    event["data"].get("tool_call_id")
+                    for event in events
+                    if event.get("kind") == "run.tool"
+                    and event.get("data", {}).get("run_id") == rid
+                ],
             }
 
         out = [run("chat", "initial-interactive"), run("schedule", "initial-scheduled")]
@@ -281,6 +303,15 @@ with tempfile.TemporaryDirectory(prefix="rstrbot-tools-probe-") as temp:
             and exact["tool_results"] == 1
             and "catalog fixture result" in exact["content"]
         ), exact
+        assert exact["tool_calls"] == [
+            {
+                "history_call_id": "catalog_fixed_tool_call",
+                "worker_call_id": "catalog_fixed_tool_call",
+            }
+        ], exact["tool_calls"]
+        assert exact["tool_event_ids"] == ["catalog_fixed_tool_call"], exact[
+            "tool_event_ids"
+        ]
         client.request(
             "DELETE",
             base

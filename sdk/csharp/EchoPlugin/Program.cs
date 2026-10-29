@@ -17,5 +17,10 @@ await PluginServer.ServeAsync(["tools"], async (method, parameters, call, cancel
         || text is null || Encoding.UTF8.GetByteCount(text) > 16384)
         throw new RpcFailure(-32602, "Invalid text");
     await call.EmitAsync("tool.progress", new JsonObject { ["stage"] = "received" }, cancellation);
-    return new JsonObject { ["content"] = text, ["effect"] = "read_only" };
+    return new JsonObject
+    {
+        ["content"] = text,
+        ["effect"] = "read_only",
+        ["call_id"] = parameters["call_id"]?.DeepClone()
+    };
 });

@@ -8,5 +8,5 @@ await serve(['tools'], async (method, params, call) => {
   const text = params.arguments?.text;
   if (typeof text !== 'string' || Buffer.byteLength(text) > 16384) throw new RpcFailure(-32602, 'Invalid text');
   await call.emit('tool.progress', { stage: 'received' });
-  return { content: text, effect: 'read_only' };
+  return { content: text, effect: 'read_only', call_id: params.call_id };
 });

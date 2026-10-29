@@ -5,6 +5,7 @@
   "cases": [
     {"name":"tool discovery","method":"tools.list","params":{},"expect_tool":"echo"},
     {"name":"unicode and structured framing","method":"tools.call","params":{"name":"echo","arguments":{"text":"你好\n🙂 quote: \" and slash: \\"}},"expect_content":"你好\n🙂 quote: \" and slash: \\","expect_event":"tool.progress"},
+    {"name":"tool call correlation","method":"tools.call","params":{"name":"echo","call_id":"model_tool_correlation_7f3a","arguments":{"text":"correlation"}},"expect_content":"correlation","expect_call_id":"model_tool_correlation_7f3a"},
     {"name":"unknown method","method":"tools.unknown","params":{},"expect_error":-32601},
     {"name":"invalid argument","method":"tools.call","params":{"name":"echo","arguments":{"text":12}},"expect_error":-32602}
   ]

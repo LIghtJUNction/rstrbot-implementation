@@ -73,6 +73,8 @@ def exercise(command, case=None, rejected=False):
                     result = response["result"]
                     if "expect_content" in case:
                         assert result["content"] == case["expect_content"], result
+                    if "expect_call_id" in case:
+                        assert result.get("call_id") == case["expect_call_id"], result
                     if "expect_tool" in case:
                         assert case["expect_tool"] in [tool["name"] for tool in result["tools"]], result
                     if "expect_event" in case:
