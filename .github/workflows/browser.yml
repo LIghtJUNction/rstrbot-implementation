@@ -17,11 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.99.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "24.22.1"
           cache: npm
@@ -50,7 +50,7 @@ jobs:
           packages=(artifacts/package/RstrBot-*-linux-*-debug.zip)
           test "${#packages[@]}" -eq 1
           python3 scripts/verify_package.py "${packages[0]}" --output test-results/package-verification.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: always()
         with:
           name: chromium-browser-acceptance
@@ -59,7 +59,7 @@ jobs:
             test-results/security/
             test-results/package-verification.json
             artifacts/screenshots/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: linux-debug-development-preview
           path: artifacts/package/
